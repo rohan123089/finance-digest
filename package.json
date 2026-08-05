@@ -1,0 +1,22 @@
+{
+  "name": "finance-digest",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Offline-first personal finance + digest system",
+  "main": "hub/server.js",
+  "scripts": {
+    "start": "node hub/server.js",
+    "hub": "node hub/server.js",
+    "test": "node tests/milestone1.test.js && node tests/milestone2.test.js && node tests/milestone3.test.js && node tests/milestone4.test.js && node tests/milestone5.test.js && node tests/milestone6.test.js",
+    "test:m1": "node tests/milestone1.test.js",
+    "test:m2": "node tests/milestone2.test.js",
+    "sync:once": "node hub/sync-cli.js once",
+    "connectors:once": "node hub/connectors/run-once.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "^0.7.15"
+  }
+}

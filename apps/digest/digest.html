@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily Digest</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121922;
+      --line: #283544;
+      --text: #edf3f8;
+      --muted: #91a0ad;
+      --accent: #5ee0a0;
+      --warn: #ffcf66;
+      --blue: #74b9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #152033, var(--bg) 55%);
+      color: var(--text);
+      font: 14px/1.4 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    .app { width: min(980px, 100%); margin: 0 auto; padding: 20px; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    h1 { margin: 4px 0 0; font-size: 34px; letter-spacing: -.03em; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #18212c;
+      color: var(--text);
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    section {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      min-height: 280px;
+    }
+    section h2 {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .list { padding: 8px 14px 14px; }
+    .item {
+      padding: 10px 0;
+      border-bottom: 1px solid #202c38;
+    }
+    .item:last-child { border-bottom: 0; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    .empty { color: var(--muted); padding: 18px 0; }
+    .status { color: var(--muted); margin-top: 14px; font-size: 12px; }
+    a { color: var(--blue); }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+      header { flex-direction: column; align-items: start; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <div class="eyebrow">Daily card</div>
+        <h1>Digest</h1>
+      </div>
+      <div class="actions">
+        <button type="button" id="refresh">Refresh</button>
+        <button type="button" id="connectors">Run connectors</button>
+        <button type="button" id="sync">Ingest sync</button>
+        <button class="primary" type="button" id="ai">AI propose</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section>
+        <h2>Today</h2>
+        <div class="list" id="today"></div>
+      </section>
+      <section>
+        <h2>Reading</h2>
+        <div class="list" id="reading"></div>
+      </section>
+      <section>
+        <h2>Junk</h2>
+        <div class="list" id="junk"></div>
+      </section>
+    </div>
+    <p class="status" id="status">Loading…</p>
+  </main>
+
+  <script>
+    "use strict";
+
+    function escapeHtml(value) {
+      const el = document.createElement("span");
+      el.textContent = value == null ? "" : String(value);
+      return el.innerHTML;
+    }
+
+    function renderItems(selector, items, mapper, emptyText) {
+      const root = document.querySelector(selector);
+      if (!items.length) {
+        root.innerHTML = `<div class="empty">${emptyText}</div>`;
+        return;
+      }
+      root.innerHTML = items.map(mapper).join("");
+    }
+
+    async function loadDigest() {
+      const response = await fetch("/api/digest");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load digest");
+      const digest = payload.digest;
+
+      renderItems("#today", digest.today || [], (item) => `
+        <div class="item">
+          <strong>${escapeHtml(item.kind)} · ${escapeHtml(item.title || item.name)}</strong>
+          <div class="meta">${escapeHtml(item.start || `${item.month}/${item.day}` || "")}</div>
+        </div>`, "Nothing for today yet");
+
+      renderItems("#reading", digest.reading || [], (item) => `
+        <div class="item">
+          <a href="${escapeHtml(item.url)}" rel="noreferrer">${escapeHtml(item.title || item.url)}</a>
+          <div class="meta">${escapeHtml(item.source)} · rank ${escapeHtml(item.rank)}</div>
+        </div>`, "No reading links");
+
+      renderItems("#junk", digest.junk || [], (item) => `
+        <div class="item">
+          <strong>${escapeHtml(item.action)}</strong>
+          <div class="meta">${escapeHtml(item.status || "pending")} · ${escapeHtml(JSON.stringify(item.targetRef))}</div>
+        </div>`, "No junk actions");
+
+      document.querySelector("#status").textContent =
+        `Updated ${digest.generatedAt || "now"} · ${payload.items.length} sync item(s)`;
+    }
+
+    async function post(path, body = {}) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Request failed");
+      return payload;
+    }
+
+    document.querySelector("#refresh").addEventListener("click", () => {
+      loadDigest().catch((error) => {
+        document.querySelector("#status").textContent = error.message;
+      });
+    });
+
+    document.querySelector("#connectors").addEventListener("click", async () => {
+      try {
+        const result = await post("/api/connectors/run", { forceMock: true });
+        document.querySelector("#status").textContent =
+          `Connectors: groupme ${result.groupme.emitted.length}, email ${result.email.emitted.length}, bank ${result.bank.emitted.length}`;
+        await loadDigest();
+      } catch (error) {
+        document.querySelector("#status").textContent = error.message;
+      }
+    });
+
+    document.querySelector("#sync").addEventListener("click", async () => {
+      try {
+        const result = await post("/api/sync/ingest");
+        document.querySelector("#status").textContent =
+          `Ingested ${result.processed.length} outbox file(s)`;
+        await loadDigest();
+      } catch (error) {
+        document.querySelector("#status").textContent = error.message;
+      }
+    });
+
+    document.querySelector("#ai").addEventListener("click", async () => {
+      try {
+        await post("/api/ai/mode", { mode: "LOCAL" });
+        const result = await post("/api/ai/propose");
+        const count = result.proposal?.flags?.length || 0;
+        document.querySelector("#status").textContent =
+          result.mode === "OFF"
+            ? "AI is OFF"
+            : `AI ${result.mode}: ${count} proposed flag(s); records not mutated`;
+      } catch (error) {
+        document.querySelector("#status").textContent = error.message;
+      }
+    });
+
+    loadDigest().catch((error) => {
+      document.querySelector("#status").textContent =
+        `${error.message}. Start the hub and open this page from localhost.`;
+    });
+  </script>
+</body>
+</html>

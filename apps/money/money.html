@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Money Review</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121922;
+      --panel-2: #18212c;
+      --line: #283544;
+      --text: #edf3f8;
+      --muted: #91a0ad;
+      --accent: #5ee0a0;
+      --warn: #ffcf66;
+      --danger: #ff7b7b;
+      --blue: #74b9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.35 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    button, input, select { font: inherit; }
+    .app {
+      width: min(1600px, 100%);
+      margin: 0 auto;
+      padding: 14px;
+    }
+    header {
+      display: grid;
+      grid-template-columns: minmax(260px, 1.3fr) minmax(300px, 1fr);
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .hero, .panel, .metric {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 10px;
+    }
+    .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #13231d, var(--panel) 58%);
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .safe-value {
+      margin: 2px 0 0;
+      color: var(--accent);
+      font-size: clamp(36px, 5vw, 62px);
+      font-weight: 750;
+      letter-spacing: -.05em;
+      line-height: 1;
+    }
+    .safe-value.negative { color: var(--danger); }
+    .safe-detail { color: var(--muted); margin-top: 8px; }
+    .config {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+      gap: 10px;
+      padding: 14px;
+    }
+    label { color: var(--muted); font-size: 11px; }
+    label span { display: block; margin-bottom: 5px; }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0e151d;
+      color: var(--text);
+      padding: 6px 8px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: var(--blue); }
+    button.commit {
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #062316;
+      font-weight: 700;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    button.commit:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metric { padding: 10px 12px; min-width: 0; }
+    .metric strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 20px;
+      letter-spacing: -.02em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .metric.external { border-color: #7b6330; background: #201c13; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 3fr) minmax(250px, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    h1, h2, p { margin: 0; }
+    h2 { font-size: 14px; }
+    .review-count { color: var(--warn); font-weight: 700; }
+    .table-wrap {
+      max-height: calc(100vh - 275px);
+      min-height: 390px;
+      overflow: auto;
+    }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    th {
+      position: sticky;
+      z-index: 2;
+      top: 0;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .06em;
+      text-align: left;
+      text-transform: uppercase;
+    }
+    th, td { border-bottom: 1px solid #202c38; padding: 6px 8px; }
+    tbody tr:hover { background: #151f2a; }
+    tbody tr.needs-review {
+      background: rgba(255, 207, 102, .1);
+      box-shadow: inset 3px 0 var(--warn);
+    }
+    tbody tr.dirty { outline: 1px solid #3d5a78; }
+    td.amount { text-align: right; font-variant-numeric: tabular-nums; }
+    td .direction { width: 98px; }
+    td .category { width: 126px; }
+    td .target { width: 118px; }
+    td select { padding: 4px 6px; }
+    select:disabled { color: #60707e; opacity: .72; }
+    .merchant { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    .badge {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 10px;
+      padding: 2px 6px;
+      text-transform: uppercase;
+    }
+    .side { display: grid; gap: 12px; }
+    .side .panel { overflow: hidden; }
+    .list { padding: 5px 12px 10px; }
+    .list-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid #202c38;
+    }
+    .list-row:last-child { border-bottom: 0; }
+    .list-row span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar {
+      height: 4px;
+      margin-top: 4px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: var(--line);
+    }
+    .bar i { display: block; height: 100%; background: var(--blue); }
+    .empty { padding: 12px; color: var(--muted); }
+    .footnote { color: var(--muted); font-size: 11px; padding: 9px 12px; border-top: 1px solid var(--line); }
+    @media (max-width: 1000px) {
+      header, .workspace { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .table-wrap { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Safe to spend this week</div>
+          <div class="safe-value" id="safe-value">$0</div>
+          <div class="safe-detail" id="safe-detail"></div>
+        </div>
+        <div>
+          <div class="eyebrow">Mode</div>
+          <strong id="mode-label">Loading…</strong>
+          <div class="safe-detail" id="mode-detail"></div>
+        </div>
+      </section>
+      <section class="panel config" aria-label="Weekly settings">
+        <label>
+          <span>Weekly income</span>
+          <input id="weekly-income" type="number" min="0" step="10">
+        </label>
+        <label>
+          <span>Weekly savings target</span>
+          <input id="weekly-savings" type="number" min="0" step="10" value="300">
+        </label>
+        <label>
+          <span>Monthly income reference</span>
+          <input id="monthly-income" type="number" min="0" step="100" value="5200">
+        </label>
+        <label>
+          <span>Persist</span>
+          <button class="commit" id="commit-btn" type="button" disabled>Commit changes</button>
+        </label>
+      </section>
+    </header>
+
+    <section class="metrics" aria-label="Money snapshot">
+      <div class="metric"><div class="eyebrow">Net worth</div><strong id="net-worth"></strong></div>
+      <div class="metric"><div class="eyebrow">Liquid</div><strong id="liquid"></strong></div>
+      <div class="metric"><div class="eyebrow">Invested</div><strong id="invested"></strong></div>
+      <div class="metric"><div class="eyebrow">Savings rate</div><strong id="savings-rate"></strong></div>
+      <div class="metric"><div class="eyebrow">Runway</div><strong id="runway"></strong></div>
+      <div class="metric external"><div class="eyebrow">Owed · parents' card</div><strong id="owed"></strong></div>
+    </section>
+
+    <section class="workspace">
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Transaction review</h2>
+          <span class="review-count" id="review-count"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Merchant</th>
+                <th>Account</th>
+                <th>Amount</th>
+                <th>Direction</th>
+                <th>Category</th>
+                <th>Transfer to</th>
+              </tr>
+            </thead>
+            <tbody id="transactions"></tbody>
+          </table>
+        </div>
+        <div class="footnote" id="footnote">Edits draft in memory until you commit.</div>
+      </section>
+
+      <aside class="side">
+        <section class="panel">
+          <div class="panel-heading"><h2>Spending by category</h2><strong id="expense-total"></strong></div>
+          <div class="list" id="categories"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Detected recurring</h2><strong id="recurring-total"></strong></div>
+          <div class="list" id="recurring"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Account balances</h2></div>
+          <div class="list" id="accounts"></div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <script src="../../engine/rules.js"></script>
+  <script src="../../engine/model.js"></script>
+  <script>
+    "use strict";
+
+    const SAMPLE_TRANSACTIONS = [
+      { id: "tx-001", date: "2026-06-01", rawMerchant: "ACME PAYROLL 0601", amount: 5200, account: "checking" },
+      { id: "tx-002", date: "2026-06-02", rawMerchant: "JUNE RENT", amount: 1650, account: "checking" },
+      { id: "tx-003", date: "2026-06-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+      { id: "tx-004", date: "2026-06-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+      { id: "tx-005", date: "2026-06-10", rawMerchant: "TRADER JOE'S #431", amount: 82.64, account: "checking" },
+      { id: "tx-006", date: "2026-06-14", rawMerchant: "CORNER COFFEE", amount: 6.75, account: "checking" },
+      { id: "tx-007", date: "2026-06-18", rawMerchant: "VANGUARD BUY VTSAX", amount: 600, account: "checking" },
+      { id: "tx-008", date: "2026-06-23", rawMerchant: "TRANSFER TO SAVINGS", amount: 400, account: "checking" },
+      { id: "tx-009", date: "2026-07-01", rawMerchant: "ACME PAYROLL 0701", amount: 5200, account: "checking" },
+      { id: "tx-010", date: "2026-07-02", rawMerchant: "JULY RENT", amount: 1650, account: "checking" },
+      { id: "tx-011", date: "2026-07-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+      { id: "tx-012", date: "2026-07-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+      { id: "tx-013", date: "2026-07-11", rawMerchant: "TRADER JOE'S #431", amount: 91.22, account: "checking" },
+      { id: "tx-014", date: "2026-07-16", rawMerchant: "SHELL OIL 5742", amount: 48.31, account: "checking" },
+      { id: "tx-015", date: "2026-07-21", rawMerchant: "CVS PHARMACY #188", amount: 23.8, account: "checking" },
+      { id: "tx-016", date: "2026-07-24", rawMerchant: "CHIPOTLE PARENTS CARD", amount: 86.25, account: "parents-card" },
+      { id: "tx-017", date: "2026-07-28", rawMerchant: "PARENTS REIMBURSEMENT", amount: 50, account: "checking" },
+      { id: "tx-018", date: "2026-08-03", rawMerchant: "ACME PAYROLL 0803", amount: 5200, account: "checking" },
+      { id: "tx-019", date: "2026-08-02", rawMerchant: "AUGUST RENT", amount: 1650, account: "checking" },
+      { id: "tx-020", date: "2026-08-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+      { id: "tx-021", date: "2026-08-05", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+      { id: "tx-022", date: "2026-08-05", rawMerchant: "WHOLE FOODS MARKET", amount: 63.17, account: "checking" },
+      { id: "tx-023", date: "2026-08-05", rawMerchant: "CHIPOTLE 2219", amount: 14.28, account: "checking" },
+      { id: "tx-024", date: "2026-08-05", rawMerchant: "VENMO PAYMENT 8831", amount: 72, account: "checking" },
+      { id: "tx-025", date: "2026-08-05", rawMerchant: "LANDMARK CINEMA", amount: 18.5, account: "checking" }
+    ];
+
+    const CATEGORIES = [
+      "income", "groceries", "dining", "housing", "transportation", "utilities",
+      "subscriptions", "health", "shopping", "entertainment", "uncategorized"
+    ];
+    const ACCOUNT_LABELS = {
+      checking: "Checking",
+      savings: "Savings",
+      vanguard: "Vanguard",
+      "parents-card": "Parents' card"
+    };
+
+    const state = {
+      hubMode: false,
+      transactions: [],
+      dirtyIds: new Set(),
+      baseline: new Map()
+    };
+
+    const currency = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0
+    });
+    const preciseCurrency = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2
+    });
+
+    const weeklyIncomeInput = document.querySelector("#weekly-income");
+    const monthlyIncomeInput = document.querySelector("#monthly-income");
+    const weeklySavingsInput = document.querySelector("#weekly-savings");
+    const commitBtn = document.querySelector("#commit-btn");
+    weeklyIncomeInput.value = (Number(monthlyIncomeInput.value) / 4.345).toFixed(2);
+
+    function option(value, label, selected) {
+      return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
+    }
+
+    function escapeHtml(value) {
+      const element = document.createElement("span");
+      element.textContent = value;
+      return element.innerHTML;
+    }
+
+    function cloneTx(tx) {
+      return { ...tx };
+    }
+
+    function rememberBaseline(rows) {
+      state.baseline.clear();
+      rows.forEach((tx) => {
+        state.baseline.set(tx.id, {
+          direction: tx.direction || "",
+          category: tx.category || "",
+          transferAccount: tx.transferAccount || ""
+        });
+      });
+      state.dirtyIds.clear();
+      updateCommitButton();
+    }
+
+    function markDirty(tx) {
+      const baseline = state.baseline.get(tx.id);
+      const dirty = !baseline ||
+        baseline.direction !== (tx.direction || "") ||
+        baseline.category !== (tx.category || "") ||
+        baseline.transferAccount !== (tx.transferAccount || "");
+      if (dirty) state.dirtyIds.add(tx.id);
+      else state.dirtyIds.delete(tx.id);
+      updateCommitButton();
+    }
+
+    function updateCommitButton() {
+      const count = state.dirtyIds.size;
+      commitBtn.disabled = count === 0;
+      commitBtn.textContent = count
+        ? `Commit ${count} change${count === 1 ? "" : "s"}`
+        : "Commit changes";
+    }
+
+    function renderTable() {
+      const rows = [...state.transactions].sort((a, b) => b.date.localeCompare(a.date));
+      document.querySelector("#transactions").innerHTML = rows.map((tx) => {
+        const directionOptions = [
+          option("", "Review…", tx.direction),
+          option("in", "Income", tx.direction),
+          option("out", "Expense", tx.direction),
+          option("transfer", "Transfer", tx.direction)
+        ].join("");
+        const categoryOptions = [
+          option("", "—", tx.category),
+          ...CATEGORIES.map((category) => option(category, category, tx.category))
+        ].join("");
+        const targetOptions = [
+          option("", "Choose…", tx.transferAccount),
+          ...Object.keys(ACCOUNT_LABELS)
+            .filter((account) => account !== tx.account)
+            .map((account) => option(account, ACCOUNT_LABELS[account], tx.transferAccount))
+        ].join("");
+        const classes = [
+          tx.needsReview ? "needs-review" : "",
+          state.dirtyIds.has(tx.id) ? "dirty" : ""
+        ].filter(Boolean).join(" ");
+        return `
+          <tr data-id="${tx.id}" class="${classes}">
+            <td>${tx.date.slice(5)}</td>
+            <td class="merchant" title="${escapeHtml(tx.merchant)}">${escapeHtml(tx.merchant)}</td>
+            <td><span class="badge">${escapeHtml(ACCOUNT_LABELS[tx.account] || tx.account)}</span></td>
+            <td class="amount">${preciseCurrency.format(tx.amount)}</td>
+            <td><select class="direction" aria-label="Direction for ${escapeHtml(tx.merchant)}">${directionOptions}</select></td>
+            <td><select class="category" ${tx.direction === "transfer" || !tx.direction ? "disabled" : ""} aria-label="Category for ${escapeHtml(tx.merchant)}">${categoryOptions}</select></td>
+            <td><select class="target" ${tx.direction === "transfer" ? "" : "disabled"} aria-label="Transfer destination for ${escapeHtml(tx.merchant)}">${targetOptions}</select></td>
+          </tr>`;
+      }).join("");
+    }
+
+    function settings() {
+      return {
+        asOfDate: "2026-08-05",
+        monthlyIncome: Number(monthlyIncomeInput.value) || 0,
+        weeklyIncome: Number(weeklyIncomeInput.value) || 0,
+        weeklySavingsTarget: Number(weeklySavingsInput.value) || 0
+      };
+    }
+
+    function renderList(selector, rows, emptyText) {
+      document.querySelector(selector).innerHTML = rows.length
+        ? rows.join("")
+        : `<div class="empty">${emptyText}</div>`;
+    }
+
+    function renderSnapshot() {
+      const snapshot = MoneyModel.computeSnapshot(state.transactions, settings());
+      const safeValue = document.querySelector("#safe-value");
+      safeValue.textContent = currency.format(snapshot.safeToSpend.remaining);
+      safeValue.classList.toggle("negative", snapshot.safeToSpend.remaining < 0);
+      document.querySelector("#safe-detail").textContent =
+        `${currency.format(snapshot.safeToSpend.weeklyIncome)} income − ` +
+        `${currency.format(snapshot.safeToSpend.committed)} committed − ` +
+        `${currency.format(snapshot.safeToSpend.savingsTarget)} savings − ` +
+        `${currency.format(snapshot.safeToSpend.spent)} spent`;
+      document.querySelector("#net-worth").textContent = currency.format(snapshot.netWorth);
+      document.querySelector("#liquid").textContent = currency.format(snapshot.liquid);
+      document.querySelector("#invested").textContent = currency.format(snapshot.invested);
+      document.querySelector("#savings-rate").textContent =
+        `${(snapshot.savingsRate * 100).toFixed(1)}%`;
+      document.querySelector("#runway").textContent = `${snapshot.runwayMonths.toFixed(1)} mo`;
+      document.querySelector("#owed").textContent = currency.format(snapshot.owed);
+      document.querySelector("#expense-total").textContent = currency.format(snapshot.expenses);
+      document.querySelector("#recurring-total").textContent =
+        `${currency.format(snapshot.recurringMonthly)}/mo`;
+
+      const categoryEntries = Object.entries(snapshot.spendingByCategory)
+        .sort((left, right) => right[1] - left[1]);
+      const largest = categoryEntries[0]?.[1] || 1;
+      renderList("#categories", categoryEntries.map(([name, amount]) => `
+        <div class="list-row">
+          <span>${escapeHtml(name)}<span class="bar"><i style="width:${(amount / largest) * 100}%"></i></span></span>
+          <strong>${currency.format(amount)}</strong>
+        </div>`), "No expenses");
+
+      renderList("#recurring", snapshot.recurring.map((item) => `
+        <div class="list-row">
+          <span>${escapeHtml(item.merchant)} <small>×${item.occurrences}</small></span>
+          <strong>${currency.format(item.amount)}</strong>
+        </div>`), "No monthly patterns yet");
+
+      renderList("#accounts", Object.entries(snapshot.balances).map(([account, balance]) => `
+        <div class="list-row">
+          <span>${escapeHtml(ACCOUNT_LABELS[account] || account)}</span>
+          <strong>${currency.format(balance)}</strong>
+        </div>`), "No accounts");
+
+      const reviewCount = state.transactions.filter((tx) => tx.needsReview).length;
+      document.querySelector("#review-count").textContent =
+        reviewCount ? `${reviewCount} needs review` : "All reviewed";
+    }
+
+    function updateReviewState(tx) {
+      tx.needsReview =
+        !tx.direction ||
+        (tx.direction === "transfer" && !tx.transferAccount) ||
+        (tx.direction !== "transfer" && !tx.category);
+    }
+
+    document.querySelector("#transactions").addEventListener("change", (event) => {
+      const row = event.target.closest("tr");
+      const tx = state.transactions.find((item) => item.id === row?.dataset.id);
+      if (!tx) return;
+
+      if (event.target.classList.contains("direction")) {
+        tx.direction = event.target.value;
+        if (tx.direction === "transfer") {
+          tx.category = "";
+          tx.transferAccount ||= tx.suggestedTransferAccount || "savings";
+        } else if (tx.direction === "in") {
+          tx.category = "income";
+          tx.transferAccount = "";
+        } else if (tx.direction === "out") {
+          tx.category = MoneyRules.categoryFor(tx.merchant);
+          tx.transferAccount = "";
+        } else {
+          tx.category = "";
+          tx.transferAccount = "";
+        }
+      }
+      if (event.target.classList.contains("category")) tx.category = event.target.value;
+      if (event.target.classList.contains("target")) tx.transferAccount = event.target.value;
+      updateReviewState(tx);
+      markDirty(tx);
+      renderTable();
+      renderSnapshot();
+    });
+
+    [weeklyIncomeInput, weeklySavingsInput].forEach((input) => {
+      input.addEventListener("input", renderSnapshot);
+    });
+    monthlyIncomeInput.addEventListener("input", () => {
+      weeklyIncomeInput.value = ((Number(monthlyIncomeInput.value) || 0) / 4.345).toFixed(2);
+      renderSnapshot();
+    });
+
+    commitBtn.addEventListener("click", async () => {
+      if (!state.dirtyIds.size) return;
+      const updates = state.transactions
+        .filter((tx) => state.dirtyIds.has(tx.id))
+        .map((tx) => ({
+          id: tx.id,
+          direction: tx.direction,
+          category: tx.category,
+          transferAccount: tx.transferAccount
+        }));
+
+      if (!state.hubMode) {
+        rememberBaseline(state.transactions);
+        document.querySelector("#footnote").textContent =
+          "Offline mode: draft accepted in memory only (no disk write).";
+        renderTable();
+        return;
+      }
+
+      commitBtn.disabled = true;
+      const response = await fetch("/api/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates, settings: settings() })
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        commitBtn.disabled = false;
+        alert(payload.error || "Commit failed");
+        return;
+      }
+      state.transactions = payload.transactions.map(cloneTx);
+      rememberBaseline(state.transactions);
+      renderTable();
+      renderSnapshot();
+      document.querySelector("#footnote").textContent =
+        `Committed ${payload.count} row(s) at ${payload.committedAt}`;
+    });
+
+    async function boot() {
+      let hubOk = false;
+      if (location.protocol.startsWith("http")) {
+        try {
+          const health = await fetch("/api/health");
+          hubOk = health.ok;
+        } catch (_error) {
+          hubOk = false;
+        }
+      }
+
+      if (hubOk) {
+        state.hubMode = true;
+        const response = await fetch("/api/transactions");
+        const payload = await response.json();
+        state.transactions = payload.transactions.map(cloneTx);
+        if (payload.settings) {
+          monthlyIncomeInput.value = payload.settings.monthlyIncome;
+          weeklyIncomeInput.value = payload.settings.weeklyIncome;
+          weeklySavingsInput.value = payload.settings.weeklySavingsTarget;
+        }
+        document.querySelector("#mode-label").textContent = "Hub mode";
+        document.querySelector("#mode-detail").textContent = "Encrypted SQLite · commit to persist";
+        document.querySelector("#footnote").textContent =
+          "Drafts stay local until you click Commit. Secrets never enter the browser.";
+      } else {
+        state.hubMode = false;
+        state.transactions = MoneyRules.normalizeTransactions(SAMPLE_TRANSACTIONS);
+        document.querySelector("#mode-label").textContent = "Offline file mode";
+        document.querySelector("#mode-detail").textContent = "Memory only · no network required";
+        document.querySelector("#footnote").textContent =
+          "Open via the hub for encrypted persistence. File mode keeps edits in memory.";
+      }
+
+      rememberBaseline(state.transactions);
+      renderTable();
+      renderSnapshot();
+    }
+
+    boot();
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+data/
+sync/up/*.json.enc
+sync/up/*.done
+sync/down/*.enc
+sync/meta/*.json
+!sync/up/.gitkeep
+!sync/down/.gitkeep
+!sync/meta/.gitkeep
+*.db
+*.db-*
+*.work.sqlite
+.env

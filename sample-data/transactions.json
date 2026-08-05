@@ -1,0 +1,29 @@
+[
+  { "id": "tx-001", "date": "2026-06-01", "rawMerchant": "ACME PAYROLL 0601", "amount": 5200, "account": "checking" },
+  { "id": "tx-002", "date": "2026-06-02", "rawMerchant": "JUNE RENT", "amount": 1650, "account": "checking" },
+  { "id": "tx-003", "date": "2026-06-04", "rawMerchant": "NETFLIX.COM", "amount": 15.49, "account": "checking" },
+  { "id": "tx-004", "date": "2026-06-07", "rawMerchant": "SPOTIFY USA", "amount": 11.99, "account": "checking" },
+  { "id": "tx-005", "date": "2026-06-10", "rawMerchant": "TRADER JOE'S #431", "amount": 82.64, "account": "checking" },
+  { "id": "tx-006", "date": "2026-06-14", "rawMerchant": "CORNER COFFEE", "amount": 6.75, "account": "checking" },
+  { "id": "tx-007", "date": "2026-06-18", "rawMerchant": "VANGUARD BUY VTSAX", "amount": 600, "account": "checking" },
+  { "id": "tx-008", "date": "2026-06-23", "rawMerchant": "TRANSFER TO SAVINGS", "amount": 400, "account": "checking" },
+
+  { "id": "tx-009", "date": "2026-07-01", "rawMerchant": "ACME PAYROLL 0701", "amount": 5200, "account": "checking" },
+  { "id": "tx-010", "date": "2026-07-02", "rawMerchant": "JULY RENT", "amount": 1650, "account": "checking" },
+  { "id": "tx-011", "date": "2026-07-04", "rawMerchant": "NETFLIX.COM", "amount": 15.49, "account": "checking" },
+  { "id": "tx-012", "date": "2026-07-07", "rawMerchant": "SPOTIFY USA", "amount": 11.99, "account": "checking" },
+  { "id": "tx-013", "date": "2026-07-11", "rawMerchant": "TRADER JOE'S #431", "amount": 91.22, "account": "checking" },
+  { "id": "tx-014", "date": "2026-07-16", "rawMerchant": "SHELL OIL 5742", "amount": 48.31, "account": "checking" },
+  { "id": "tx-015", "date": "2026-07-21", "rawMerchant": "CVS PHARMACY #188", "amount": 23.8, "account": "checking" },
+  { "id": "tx-016", "date": "2026-07-24", "rawMerchant": "CHIPOTLE PARENTS CARD", "amount": 86.25, "account": "parents-card" },
+  { "id": "tx-017", "date": "2026-07-28", "rawMerchant": "PARENTS REIMBURSEMENT", "amount": 50, "account": "checking" },
+
+  { "id": "tx-018", "date": "2026-08-03", "rawMerchant": "ACME PAYROLL 0803", "amount": 5200, "account": "checking" },
+  { "id": "tx-019", "date": "2026-08-02", "rawMerchant": "AUGUST RENT", "amount": 1650, "account": "checking" },
+  { "id": "tx-020", "date": "2026-08-04", "rawMerchant": "NETFLIX.COM", "amount": 15.49, "account": "checking" },
+  { "id": "tx-021", "date": "2026-08-05", "rawMerchant": "SPOTIFY USA", "amount": 11.99, "account": "checking" },
+  { "id": "tx-022", "date": "2026-08-05", "rawMerchant": "WHOLE FOODS MARKET", "amount": 63.17, "account": "checking" },
+  { "id": "tx-023", "date": "2026-08-05", "rawMerchant": "CHIPOTLE 2219", "amount": 14.28, "account": "checking" },
+  { "id": "tx-024", "date": "2026-08-05", "rawMerchant": "VENMO PAYMENT 8831", "amount": 72, "account": "checking" },
+  { "id": "tx-025", "date": "2026-08-05", "rawMerchant": "LANDMARK CINEMA", "amount": 18.5, "account": "checking" }
+]
