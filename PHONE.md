@@ -1,46 +1,39 @@
-# Phone / Shelf — easy path
+# Phone / Shelf — one HTML file
 
 Repo: https://github.com/rohan123089/finance-digest
 
-## What to put in Shelf
-
-Shelf should load the **hub home** HTML (launcher for Money + Daily Digest). It does
-**not** need to implement those apps itself.
-
-### Best: open from the laptop hub (same Wi‑Fi)
-
-1. On the laptop: `npm start` in this repo.
-2. Find your laptop LAN IP (e.g. `ipconfig` → IPv4 like `192.168.1.20`).
-3. In Shelf, open:
+## The only file you need
 
 ```text
-http://YOUR_LAPTOP_IP:8787/apps/hub/home.html
+apps/shelf/shelf.html
 ```
 
-Then tap **Money** or **Daily Digest**.
+That **one** file is Money + Digest (tabs). Everything else is optional.
 
-`127.0.0.1` only works on the laptop, not on the phone.
+### Option A — open from the laptop hub (easiest)
 
-### Download the HTML from GitHub
-
-1. On your phone, open the repo → **Code** → **Download ZIP**.
-2. Unzip. You need at least:
+1. Laptop: `npm start`
+2. Same Wi‑Fi, in Shelf open:
 
 ```text
-apps/hub/home.html
-apps/money/money.html
-apps/digest/digest.html
-apps/shelf/hub-shelf.js
-apps/shelf/mock-shelf.js
+http://YOUR_LAPTOP_IP:8787/apps/shelf/shelf.html
 ```
 
-3. Point Shelf at `apps/hub/home.html` (file path or however Shelf loads local HTML).
+### Option B — download one file
 
-**Note:** Offline HTML still needs a real Shelf bridge (`window.Shelf`) for data.
-Mock Shelf is for laptop preview only. Money/Digest data comes from hub sync /
-the native Shelf bridge — not from GitHub alone.
+1. Open the repo on GitHub (phone browser, logged in if private).
+2. Go to `apps/shelf/shelf.html` → raw / download that file only.
+3. Or **Code → Download ZIP**, then keep only `apps/shelf/shelf.html`.
+4. Point Shelf at that file.
 
-## Pairing (once)
+You do **not** need `home.html`, `money.html`, `digest.html`, or separate JS files.
 
-On the laptop open http://127.0.0.1:8787/apps/hub/pairing.html and scan with Shelf
-so both share `data/sync.key`.
+### Pairing (once, on the laptop)
+
+http://127.0.0.1:8787/apps/hub/pairing.html — scan with Shelf so sync works.
+
+Rebuild the one-file app after editing sources:
+
+```powershell
+npm run build:shelf
+```

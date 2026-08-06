@@ -12,18 +12,17 @@ relays those calls to the local hub.
 
 ## Run
 
-Phone / Shelf setup: see [`PHONE.md`](PHONE.md).
-
 ```powershell
 npm install
 npm start
 ```
 
-Open <http://127.0.0.1:8787/> (hub home). Point Shelf at that page — it launches
-**Money** and **Daily Digest** as separate HTML apps. The first launch creates the
-encrypted database, seeds starter accounts (UWCU checking/savings, Amex, Discover,
-Vanguard, outside payments) with **no sample transactions**, and stores a random
-database key in the OS keychain. To load the old 25-row demo set instead:
+Open <http://127.0.0.1:8787/> — one Shelf app (**Money** + **Digest** tabs).
+Phone setup: [`PHONE.md`](PHONE.md) (download only `apps/shelf/shelf.html`).
+The first launch creates the encrypted database, seeds starter accounts (UWCU
+checking/savings, Amex, Discover, Vanguard, outside payments) with **no sample
+transactions**, and stores a random database key in the OS keychain. To load the
+old 25-row demo set instead:
 
 ```powershell
 $env:HUB_SEED_SAMPLE = "1"
@@ -37,6 +36,8 @@ Configuration:
 - `HUB_HOST` defaults to `127.0.0.1`; keep it on loopback.
 - `HUB_SYNC_ROOT` changes the phone sync folder (default `sync/`).
 - `HUB_SEED_SAMPLE=1` seeds sample transactions on an empty database.
+  Do **not** use this once you are importing/syncing real accounts — demo rows
+  contaminate net worth, invested, and category totals.
 
 There is deliberately no database-passphrase environment variable or hardcoded
 development key.
@@ -47,17 +48,22 @@ Money accounts live in the encrypted DB and can be added anytime from the Money
 UI (**Add account**) or `POST /api/accounts`.
 
 **Recommended hybrid:** use SimpleFIN for institutions it supports (Amex,
-Discover, Vanguard, …). For banks it does not list (e.g. UWCU), download the
-CSV/OFX when the statement email arrives — Digest will surface an **Import …
-statement** reminder when Gmail sees that mail (after email connectors are live).
+Discover, Vanguard, …). UWCU emails / portal **PDF** e-statements (often a
+single personal statement covering checking + savings). Browser “View Document”
+saves are image-only — the hub OCRs them and **auto-splits** REWARDS CHECKING →
+`uwcu-checking` and SAVINGS ACCOUNT → `uwcu-savings`. Digest reminds you when
+Gmail sees the statement mail (after email connectors are live).
 
-**CSV / OFX import** (offline path):
+**CSV / OFX / PDF import** (offline path):
 
 ```powershell
 npm run import:file -- --account amex --file .\Downloads\amex.csv
+npm run import:file -- --account uwcu-auto --file ".\Downloads\View Document - UW Credit Union-july.pdf"
 ```
 
-Or use **Import CSV/OFX** in the Money sidebar while the hub is running.
+Or use **Import CSV/OFX/PDF** in Money (pick **UWCU statement (auto-split)**).
+PDF OCR takes roughly 20–40 seconds. Each upload appears under **Recent uploads**
+with an **Undo** button that removes only that batch.
 
 **SimpleFIN Bridge** (live bank sync):
 
@@ -69,6 +75,23 @@ Or use **Import CSV/OFX** in the Money sidebar while the hub is running.
 
 Venmo is **not** a separate account — Venmo charges that hit UWCU/Amex stay in
 review so you can decide spending vs transfer.
+
+## Card rewards optimizer
+
+Money → **Card rewards** scores the last 90 days of spending against Amex/Discover
+earn rules and active offers. Rates are treated as **cash-equivalent** (advisory
+only — not a guarantee of issuer posting).
+
+- **Refresh from web** — best-effort Discover quarterly category pull (fails closed;
+  keeps your last data). Amex starts as editable seed rules (`seed_only`).
+- **Add offer** — manually paste a bonus category/rate anytime; manual rows are
+  never overwritten by web refresh.
+- **Optimize** — pointers like “use Discover for gas this quarter.”
+
+```powershell
+npm run connectors:once
+# or with the hub running: Money → Refresh from web / Optimize
+```
 
 ```powershell
 # Optional: claim from CLI after storing nothing in the repo
@@ -128,7 +151,7 @@ uses sample data and performs no network access. When served by the hub,
 - `GET /api/transactions` → `{ kind, rows, asOfDate, settings, accounts }`
 - `GET /api/accounts` → `{ kind, accounts }`
 - `POST /api/accounts` / `PATCH /api/accounts/:id` → create or update accounts
-- `POST /api/import` → `{ accountId, format, text }` CSV/OFX ingest
+- `POST /api/import` → `{ accountId, format, text }` or `{ accountId, format: "pdf", base64 }` CSV/OFX/PDF ingest
 - `POST /api/simplefin/claim` → one-time setup token → OS-keychain access URL
 - `GET /api/simplefin/remote` / `POST /api/simplefin/map` / `POST /api/simplefin/sync`
 - `GET /api/snapshot` → redacted aggregate snapshot with no raw rows or account numbers
@@ -167,7 +190,7 @@ npm test
 ```
 
 Covers Shelf, rules, SQLCipher, sync ingest, connectors, digest assembly, gated AI,
-accounts registry, CSV/OFX import, and SimpleFIN mock sync.
+accounts registry, CSV/OFX/PDF import, and SimpleFIN mock sync.
 
 ## M4 digest assembly
 
@@ -181,6 +204,15 @@ hub from sync items + deterministic money tasks:
 - **Junk** — pending unsubscribe/mute first
 
 The digest HTML only calls `window.Shelf.*` (refresh + outbox actions + optional AI propose).
+
+## Standing bills (rent / utilities / subscriptions)
+
+Set once in **Money → Bills schedule** (due day of month + remind N days before).
+Active bills appear on Digest **Today** inside the remind window (or when overdue)
+as `Pay Rent · due in 3 days`, with **Paid** / **Dismiss** for that month.
+
+Defaults seed Rent (1st, 5-day lead) and Utilities (15th); set amounts in Money.
+API: `GET/POST/PATCH/DELETE /api/bills`.
 
 ## M7 life capture (email / SMS / GroupMe → calendar / tasks)
 

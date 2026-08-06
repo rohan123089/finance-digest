@@ -5,10 +5,12 @@
   "description": "Offline-first personal finance + digest system",
   "main": "hub/server.js",
   "scripts": {
-    "start": "node hub/server.js",
+    "build:shelf": "node scripts/build-shelf-html.js",
+    "start": "node scripts/build-shelf-html.js && node hub/server.js",
     "hub": "node hub/server.js",
-    "test": "node tests/money-shelf.test.js && node tests/milestone1.test.js && node tests/hub-m1.test.js && node tests/hub-m2.test.js && node tests/hub-m3.test.js && node tests/hub-m4.test.js && node tests/hub-m5.test.js && node tests/hub-m6.test.js && node tests/hub-m7.test.js && node tests/accounts-simplefin.test.js",
+    "test": "node tests/money-shelf.test.js && node tests/milestone1.test.js && node tests/cashflow-safe.test.js && node tests/holdings-split.test.js && node tests/hub-m1.test.js && node tests/hub-m2.test.js && node tests/hub-m3.test.js && node tests/hub-m4.test.js && node tests/hub-m5.test.js && node tests/hub-m6.test.js && node tests/hub-m7.test.js && node tests/hub-bills.test.js && node tests/accounts-simplefin.test.js && node tests/rewards.test.js",
     "test:m1": "node tests/milestone1.test.js && node tests/hub-m1.test.js",
+    "test:rewards": "node tests/rewards.test.js",
     "test:accounts": "node tests/accounts-simplefin.test.js",
     "test:m2": "node tests/hub-m2.test.js",
     "test:m3": "node tests/hub-m3.test.js",
@@ -16,6 +18,7 @@
     "test:m5": "node tests/hub-m5.test.js",
     "test:m6": "node tests/hub-m6.test.js",
     "test:m7": "node tests/hub-m7.test.js",
+    "test:bills": "node tests/hub-bills.test.js",
     "test:money": "node tests/money-shelf.test.js",
     "sync:once": "node hub/sync-cli.js",
     "import:file": "node hub/import/cli.js",
@@ -26,9 +29,13 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.3",
     "better-sqlite3": "npm:better-sqlite3-multiple-ciphers@^12.11.1",
     "keytar": "^7.9.0",
     "libsodium-wrappers": "^0.7.15",
-    "qrcode": "^1.5.4"
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^4.10.38",
+    "qrcode": "^1.5.4",
+    "tesseract.js": "^7.0.0"
   }
 }

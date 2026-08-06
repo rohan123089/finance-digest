@@ -1,0 +1,1871 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shelf · Money & Digest</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121922;
+      --line: #283544;
+      --text: #edf3f8;
+      --muted: #91a0ad;
+      --accent: #5ee0a0;
+      --warn: #ffcf66;
+      --danger: #ff7b7b;
+      --blue: #74b9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 system-ui, "Segoe UI", sans-serif;
+    }
+    .shell { max-width: 720px; margin: 0 auto; padding: 12px 14px 40px; }
+    .top {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .brand .eyebrow {
+      color: var(--muted); font-size: 11px; font-weight: 700;
+      letter-spacing: .12em; text-transform: uppercase;
+    }
+    .brand h1 { margin: 2px 0 0; font-size: 26px; letter-spacing: -.03em; }
+    .tabs { display: flex; gap: 6px; }
+    .tabs button {
+      border: 1px solid var(--line); background: #18212c; color: var(--text);
+      border-radius: 999px; padding: 8px 14px; cursor: pointer; font-weight: 600;
+    }
+    .tabs button.active {
+      background: var(--accent); color: #062316; border-color: transparent;
+    }
+    .bridge { color: var(--muted); font-size: 12px; width: 100%; }
+    .panel {
+      display: none; border: 1px solid var(--line); border-radius: 12px;
+      background: var(--panel); padding: 14px; margin-bottom: 12px;
+    }
+    .panel.on { display: block; }
+    .hero {
+      padding: 14px; border-radius: 10px; margin-bottom: 12px;
+      background: linear-gradient(135deg, #13231d, var(--panel) 60%);
+      border: 1px solid var(--line);
+    }
+    .safe {
+      font-size: 42px; font-weight: 750; letter-spacing: -.04em;
+      color: var(--accent); line-height: 1;
+    }
+    .safe.neg { color: var(--danger); }
+    .muted { color: var(--muted); font-size: 12px; }
+    .metrics {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+      background: #0e151d;
+    }
+    .metric strong { display: block; font-size: 18px; margin-top: 2px; }
+    h2 { margin: 0 0 8px; font-size: 14px; }
+    .row {
+      display: flex; justify-content: space-between; gap: 10px;
+      padding: 10px 0; border-bottom: 1px solid #202c38; font-size: 13px;
+    }
+    .row:last-child { border-bottom: 0; }
+    .empty, .status { color: var(--muted); padding: 12px 0; font-size: 13px; }
+    button.act, button.tiny {
+      border: 1px solid var(--line); border-radius: 8px; background: #18212c;
+      color: var(--text); padding: 6px 10px; cursor: pointer; font-size: 12px;
+      margin: 4px 4px 0 0;
+    }
+    button.primary {
+      background: var(--accent); color: #062316; border-color: transparent; font-weight: 700;
+    }
+    input, select {
+      width: 100%; border: 1px solid var(--line); border-radius: 8px;
+      background: #0e151d; color: var(--text); padding: 8px; margin: 4px 0 8px;
+    }
+    label { font-size: 12px; color: var(--muted); display: block; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .digest-cols { display: grid; gap: 10px; }
+    .digest-box {
+      border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+      background: #0e151d; min-height: 80px;
+    }
+    .digest-box h3 {
+      margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--muted);
+    }
+    a { color: var(--blue); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="top">
+      <div class="brand">
+        <div class="eyebrow">One app</div>
+        <h1>Shelf</h1>
+      </div>
+      <div class="tabs" role="tablist">
+        <button type="button" class="active" data-tab="money">Money</button>
+        <button type="button" data-tab="digest">Digest</button>
+      </div>
+      <div class="bridge" id="bridge">Starting…</div>
+    </div>
+
+    <div id="boot-error" class="empty" hidden></div>
+
+    <!-- MONEY -->
+    <section class="panel on" id="tab-money">
+      <div class="hero">
+        <div class="eyebrow" id="safe-label">Safe to spend</div>
+        <div class="safe" id="safe-value">—</div>
+        <div class="muted" id="safe-detail">Load from Shelf…</div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><div class="eyebrow">Net worth</div><strong id="m-nw">—</strong></div>
+        <div class="metric"><div class="eyebrow">Liquid</div><strong id="m-liq">—</strong></div>
+        <div class="metric"><div class="eyebrow">Owed</div><strong id="m-owed">—</strong></div>
+        <div class="metric"><div class="eyebrow">Runway</div><strong id="m-run">—</strong></div>
+      </div>
+
+      <h2>Bills</h2>
+      <div id="bills-list" class="muted">—</div>
+      <div class="grid2" style="margin-top:10px">
+        <label>Title<input id="bill-title" placeholder="Rent"></label>
+        <label>Amount<input id="bill-amount" type="number" min="0" step="1" placeholder="1450"></label>
+        <label>Due day<input id="bill-due" type="number" min="1" max="31" value="1"></label>
+        <label>Remind days before<input id="bill-lead" type="number" min="0" max="28" value="5"></label>
+      </div>
+      <button type="button" class="act" id="bill-add">Add / update bill</button>
+
+      <h2 style="margin-top:18px">Transactions <span class="muted" id="review-count"></span></h2>
+      <div id="tx-list" class="muted">—</div>
+      <p class="status" id="money-status"></p>
+    </section>
+
+    <!-- DIGEST -->
+    <section class="panel" id="tab-digest">
+      <div class="toolbar">
+        <button type="button" class="act" id="digest-refresh">Refresh</button>
+        <button type="button" class="act primary" id="ai-propose">Propose nudges</button>
+      </div>
+      <div class="digest-cols">
+        <div class="digest-box"><h3>Today</h3><div id="today"></div></div>
+        <div class="digest-box"><h3>Watching</h3><div id="watching"></div></div>
+        <div class="digest-box"><h3>Reading</h3><div id="reading"></div></div>
+        <div class="digest-box"><h3>Junk</h3><div id="junk"></div></div>
+      </div>
+      <p class="status" id="digest-status">—</p>
+    </section>
+  </div>
+
+  <script>
+/**
+ * Browser-to-hub Shelf adapter.
+ *
+ * HTML apps call only window.Shelf. This adapter owns the same-origin HTTP
+ * relay when an app is served by the laptop hub. It does nothing for file://
+ * pages or when the native Android bridge is already present.
+ */
+(function (root) {
+  "use strict";
+
+  if (root.Shelf?.__real || root.location?.protocol === "file:") return;
+  if (!/^https?:$/.test(root.location?.protocol || "")) return;
+
+  function shelfError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    error.shelf = true;
+    return error;
+  }
+
+  async function request(path, options) {
+    let response;
+    try {
+      response = await fetch(path, options);
+    } catch (_error) {
+      throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable");
+    }
+    const payload = await response.json();
+    if (!response.ok) {
+      throw shelfError("HUB_ERROR", payload.error || "The laptop hub rejected the request");
+    }
+    return payload;
+  }
+
+  root.Shelf = {
+    __real: true,
+    __hub: true,
+    __version: 1,
+    data: {
+      async get(kind) {
+        if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
+          throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
+        }
+        const path =
+          kind === "accounts"
+            ? "/api/accounts"
+            : kind === "bills"
+              ? "/api/bills"
+              : kind === "rewards"
+                ? "/api/rewards"
+                : `/api/${encodeURIComponent(kind)}`;
+        const payload = await request(path);
+        // The hub is the source of truth and may return raw rows. Expose them
+        // under the device-contract `transactions` field for a single app path.
+        if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
+          payload.transactions = payload.rows;
+        }
+        return payload;
+      }
+    },
+    accounts: {
+      list() {
+        return request("/api/accounts").then((payload) => payload.accounts || []);
+      },
+      create(account) {
+        return request("/api/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(account)
+        });
+      },
+      update(id, patch) {
+        return request(`/api/accounts/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+      }
+    },
+    bills: {
+      list() {
+        return request("/api/bills");
+      },
+      create(bill) {
+        return request("/api/bills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bill)
+        });
+      },
+      update(id, patch) {
+        return request(`/api/bills/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+      },
+      remove(id) {
+        return request(`/api/bills/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
+      }
+    },
+    import: {
+      text(payload) {
+        return request("/api/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      },
+      list() {
+        return request("/api/imports");
+      },
+      undo(id) {
+        return request(`/api/imports/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
+      }
+    },
+    rewards: {
+      get() {
+        return request("/api/rewards");
+      },
+      optimize() {
+        return request("/api/rewards/optimize");
+      },
+      refresh(forceMock) {
+        return request("/api/rewards/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ forceMock: Boolean(forceMock) })
+        });
+      },
+      saveOffer(offer) {
+        return request("/api/rewards/offers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(offer)
+        });
+      },
+      saveRule(rule) {
+        return request("/api/rewards/rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(rule)
+        });
+      }
+    },
+    // secure.* rejects on purpose, matching the device: tokens live in Connect
+    // and are used via Net.call, never handed back to the WebView.
+    secure: {
+      get() {
+        return Promise.reject(shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call"));
+      },
+      set() {
+        return Promise.reject(shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call"));
+      },
+      delete() {
+        return Promise.reject(shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call"));
+      }
+    },
+    // Browser HTML must not drive connectors. Phone Connect + Net.call stays native.
+    Net: {
+      call() {
+        return Promise.reject(
+          shelfError("NET_NATIVE_ONLY", "Net.call is not available in the hub HTML relay")
+        );
+      }
+    },
+    ai: {
+      mode() {
+        return request("/api/ai/mode");
+      },
+      setMode(mode) {
+        return request("/api/ai/mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode })
+        });
+      },
+      propose() {
+        return request("/api/ai/propose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+      },
+      proposals() {
+        return request("/api/ai/proposals");
+      }
+    },
+    outbox: {
+      push(items) {
+        const list = Array.isArray(items) ? items : [items];
+        return request("/api/outbox", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: list })
+        });
+      }
+    }
+  };
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+  </script>
+  <script>
+/**
+ * mock-shelf.js — browser shim for window.Shelf
+ *
+ * Installs only when a real Shelf bridge is absent. Shape matches the real
+ * Android WebView contract so app HTML stays identical in both environments.
+ * No fetch, no network, no credentials — sample data is embedded.
+ */
+(function (root) {
+  "use strict";
+
+  if (root.Shelf && root.Shelf.__real) return;
+  if (root.Shelf && root.Shelf.__mock) return;
+
+  function shelfError(code, message) {
+    const err = new Error(message);
+    err.code = code;
+    err.shelf = true;
+    return err;
+  }
+
+  function ok(value) {
+    return Promise.resolve(value);
+  }
+
+  function fail(code, message) {
+    return Promise.reject(shelfError(code, message));
+  }
+
+  // Sample covers: income, ordinary expenses, checking→savings, Vanguard buy
+  // (transfer), ambiguous Venmo (needsReview), outside-payments external expense,
+  // reimbursement transfer, and recurring Netflix/Spotify.
+  const SAMPLE_TRANSACTIONS = [
+    { id: "tx-001", date: "2026-06-01", rawMerchant: "ACME PAYROLL 0601", amount: 5200, account: "checking" },
+    { id: "tx-002", date: "2026-06-02", rawMerchant: "JUNE RENT", amount: 1650, account: "checking" },
+    { id: "tx-003", date: "2026-06-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+    { id: "tx-004", date: "2026-06-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+    { id: "tx-005", date: "2026-06-10", rawMerchant: "TRADER JOE'S #431", amount: 82.64, account: "checking" },
+    { id: "tx-006", date: "2026-06-14", rawMerchant: "CORNER COFFEE", amount: 6.75, account: "checking" },
+    { id: "tx-007", date: "2026-06-18", rawMerchant: "VANGUARD BUY VTSAX", amount: 600, account: "checking" },
+    { id: "tx-008", date: "2026-06-23", rawMerchant: "TRANSFER TO SAVINGS", amount: 400, account: "checking" },
+    { id: "tx-009", date: "2026-07-01", rawMerchant: "ACME PAYROLL 0701", amount: 5200, account: "checking" },
+    { id: "tx-010", date: "2026-07-02", rawMerchant: "JULY RENT", amount: 1650, account: "checking" },
+    { id: "tx-011", date: "2026-07-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+    { id: "tx-012", date: "2026-07-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+    { id: "tx-013", date: "2026-07-11", rawMerchant: "TRADER JOE'S #431", amount: 91.22, account: "checking" },
+    { id: "tx-014", date: "2026-07-16", rawMerchant: "SHELL OIL 5742", amount: 48.31, account: "checking" },
+    { id: "tx-015", date: "2026-07-21", rawMerchant: "CVS PHARMACY #188", amount: 23.8, account: "checking" },
+    { id: "tx-016", date: "2026-07-24", rawMerchant: "CHIPOTLE OUTSIDE PAYMENT", amount: 86.25, account: "outside-payments" },
+    { id: "tx-017", date: "2026-07-28", rawMerchant: "OUTSIDE PAYMENT REIMBURSEMENT", amount: 50, account: "checking" },
+    { id: "tx-018", date: "2026-08-03", rawMerchant: "ACME PAYROLL 0803", amount: 5200, account: "checking" },
+    { id: "tx-019", date: "2026-08-02", rawMerchant: "AUGUST RENT", amount: 1650, account: "checking" },
+    { id: "tx-020", date: "2026-08-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
+    { id: "tx-021", date: "2026-08-05", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
+    { id: "tx-022", date: "2026-08-05", rawMerchant: "WHOLE FOODS MARKET", amount: 63.17, account: "checking" },
+    { id: "tx-023", date: "2026-08-05", rawMerchant: "CHIPOTLE 2219", amount: 14.28, account: "checking" },
+    { id: "tx-024", date: "2026-08-05", rawMerchant: "VENMO PAYMENT 8831", amount: 72, account: "checking" },
+    { id: "tx-025", date: "2026-08-05", rawMerchant: "LANDMARK CINEMA", amount: 18.5, account: "checking" }
+  ];
+
+  const memoryFs = Object.create(null);
+  const outbox = [];
+  const transactionOverrides = Object.create(null);
+  const mockSettings = {
+    asOfDate: "2026-08-05",
+    weeklySavingsTarget: 300,
+    openingBalances: {
+      checking: 6200,
+      savings: 12000,
+      vanguard: 28000,
+      "outside-payments": 0
+    },
+    accountTypes: {
+      checking: "cash",
+      savings: "cash",
+      vanguard: "investment",
+      "outside-payments": "external"
+    }
+  };
+  // Stands in for the transactions the encrypted digest/snapshot would carry
+  // down to the device. Set to null to exercise the "no synced data" path.
+  const syncedSnapshot = { transactions: SAMPLE_TRANSACTIONS };
+  const shareListeners = [];
+  const appUrlListeners = [];
+  let imageSeq = 0;
+
+  const Shelf = {
+    __mock: true,
+    __version: 1,
+
+    data: {
+      get(kind, opts) {
+        void opts;
+        if (kind === "transactions") {
+          // Device contract: transactions are only whatever the encrypted
+          // digest/snapshot supplied. With no synced snapshot the value is null.
+          if (!syncedSnapshot) return ok(null);
+          const transactions = (root.MoneyRules
+            ? root.MoneyRules.normalizeTransactions(syncedSnapshot.transactions)
+            : syncedSnapshot.transactions
+          ).map((row) => ({ ...row, ...(transactionOverrides[row.id] || {}) }));
+          return ok({
+            kind: "transactions",
+            transactions,
+            asOfDate: mockSettings.asOfDate,
+            settings: {
+              weeklySavingsTarget: mockSettings.weeklySavingsTarget
+            }
+          });
+        }
+        if (kind === "digest") {
+          return ok({ kind: "digest", today: [], reading: [], junk: [] });
+        }
+        if (kind === "snapshot") {
+          if (!syncedSnapshot) return ok(null);
+          if (!root.MoneyRules || !root.MoneyModel) {
+            return fail("NOT_READY", "Money engine has not loaded");
+          }
+          const snapshot = root.MoneyModel.computeSnapshot(
+            root.MoneyRules.normalizeTransactions(syncedSnapshot.transactions).map((row) => ({
+              ...row,
+              ...(transactionOverrides[row.id] || {})
+            })),
+            mockSettings
+          );
+          return ok({
+            kind: "snapshot",
+            netWorth: snapshot.netWorth,
+            liquid: snapshot.liquid,
+            invested: snapshot.invested,
+            savingsRatePct: Math.round(snapshot.savingsRate * 1000) / 10,
+            recurringMonthly: snapshot.recurringMonthly,
+            runwayMonths: Math.round(snapshot.runwayMonths * 10) / 10,
+            owed: snapshot.owed,
+            expenses: snapshot.expenses,
+            expensesThisMonth: snapshot.expensesThisMonth,
+            spendingMonth: snapshot.spendingMonth,
+            spendingByCategory: snapshot.spendingByCategory,
+            recurring: snapshot.recurring,
+            balances: snapshot.balances,
+            safeToSpend: {
+              period: snapshot.safeToSpend.period,
+              periodSource: snapshot.safeToSpend.periodSource,
+              nextPayday: snapshot.safeToSpend.nextPayday,
+              horizonDays: snapshot.safeToSpend.horizonDays,
+              amount: snapshot.safeToSpend.remaining,
+              income: snapshot.safeToSpend.income,
+              weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+              committed: snapshot.safeToSpend.committed,
+              commitments: snapshot.safeToSpend.commitments,
+              savingsTarget: snapshot.safeToSpend.savingsTarget,
+              spent: snapshot.safeToSpend.spent,
+              remaining: snapshot.safeToSpend.remaining
+            },
+            flags: []
+          });
+        }
+        if (kind === "accounts") {
+          return ok({
+            kind: "accounts",
+            accounts: [
+              { id: "checking", label: "Checking", type: "cash", openingBalance: 6200, simplefinAccountId: null },
+              { id: "savings", label: "Savings", type: "cash", openingBalance: 12000, simplefinAccountId: null },
+              { id: "vanguard", label: "Vanguard", type: "investment", openingBalance: 28000, simplefinAccountId: null },
+              { id: "outside-payments", label: "Outside payments", type: "external", openingBalance: 0, simplefinAccountId: null }
+            ]
+          });
+        }
+        return fail("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
+      }
+    },
+
+    accounts: {
+      list() {
+        return Shelf.data.get("accounts").then((payload) => payload.accounts || []);
+      },
+      create() {
+        return fail("HUB_ONLY", "Creating accounts requires the laptop hub");
+      },
+      update() {
+        return fail("HUB_ONLY", "Updating accounts requires the laptop hub");
+      }
+    },
+
+    import: {
+      text() {
+        return fail("HUB_ONLY", "Import requires the laptop hub");
+      },
+      list() {
+        return ok({ kind: "imports", batches: [] });
+      },
+      undo() {
+        return fail("HUB_ONLY", "Undo import requires the laptop hub");
+      }
+    },
+
+    rewards: {
+      get() {
+        return ok({
+          kind: "rewards",
+          pointers: [],
+          activeOffers: [],
+          byCategory: [],
+          totals: { spend: 0, actualEarn: 0, bestEarn: 0, missedUsd: 0 },
+          rules: [],
+          offers: []
+        });
+      },
+      optimize() {
+        return Shelf.rewards.get();
+      },
+      refresh() {
+        return fail("HUB_ONLY", "Rewards refresh requires the laptop hub");
+      },
+      saveOffer() {
+        return fail("HUB_ONLY", "Saving offers requires the laptop hub");
+      },
+      saveRule() {
+        return fail("HUB_ONLY", "Saving rules requires the laptop hub");
+      }
+    },
+
+    contacts: {
+      list() {
+        return ok([
+          { id: "c1", name: "A. Rivera", month: 8, day: 6 }
+        ]);
+      }
+    },
+
+    sms: {
+      query({ sinceId } = {}) {
+        void sinceId;
+        return ok({ messages: [], latestId: null });
+      }
+    },
+
+    camera: {
+      capture() {
+        imageSeq += 1;
+        const imageRef = `mock-img-${imageSeq}`;
+        memoryFs[`attachments/${imageRef}`] = { type: "image/mock", bytes: null };
+        return ok({ imageRef });
+      }
+    },
+
+    ocr: {
+      recognize(imageRef) {
+        if (!imageRef) return fail("BAD_REF", "imageRef required");
+        return ok({
+          text: "",
+          blocks: [],
+          imageRef
+        });
+      }
+    },
+
+    fs: {
+      read(path) {
+        if (!(path in memoryFs)) return fail("NOT_FOUND", `No such path: ${path}`);
+        return ok(memoryFs[path]);
+      },
+      write(path, data) {
+        memoryFs[path] = data;
+        return ok({ path, bytes: typeof data === "string" ? data.length : 0 });
+      }
+    },
+
+    // secure.* rejects on purpose: returning tokens would expose them to the
+    // WebView. Configure tokens in Connect and reach them via Net.call.
+    secure: {
+      get() {
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+      },
+      set() {
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+      },
+      delete() {
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+      }
+    },
+
+    // Desktop mock has no Connect store. Real phone Shelf implements Net.call.
+    Net: {
+      call() {
+        return fail("NET_NATIVE_ONLY", "Net.call requires the native Shelf Connect store");
+      }
+    },
+
+    ai: {
+      mode() {
+        return ok({ mode: "OFF" });
+      },
+      setMode() {
+        return fail("AI_HUB_ONLY", "AI mode changes require the laptop hub");
+      },
+      propose() {
+        return fail("AI_HUB_ONLY", "AI propose requires the laptop hub");
+      },
+      proposals() {
+        return ok({ proposals: [] });
+      }
+    },
+
+    outbox: {
+      push(items) {
+        const list = Array.isArray(items) ? items : [items];
+        list.forEach((item) => {
+          outbox.push(item);
+          if (item?.type === "action.transaction.update" && item.data?.id) {
+            transactionOverrides[item.data.id] = { ...item.data };
+          }
+          if (item?.type === "action.settings.update" && item.data) {
+            Object.assign(mockSettings, item.data);
+          }
+        });
+        return ok({ queued: list.length, total: outbox.length });
+      },
+      /** Mock-only helper for tests; real Shelf has no peek. */
+      __peek() {
+        return outbox.slice();
+      }
+    },
+
+    notify({ title, body } = {}) {
+      return ok({ delivered: false, title: title || "", body: body || "", mock: true });
+    },
+
+    onShare(cb) {
+      if (typeof cb === "function") shareListeners.push(cb);
+      return ok({ listening: true });
+    },
+
+    onAppUrl(cb) {
+      if (typeof cb === "function") appUrlListeners.push(cb);
+      return ok({ listening: true });
+    }
+  };
+
+  root.Shelf = Shelf;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+  </script>
+  <script>
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.MoneyRules = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  // Legacy sample ids + starter registry ids. Prefer DB accountTypes at runtime.
+  const ACCOUNT_TYPES = {
+    checking: "cash",
+    savings: "cash",
+    "uwcu-checking": "cash",
+    "uwcu-savings": "cash",
+    vanguard: "investment",
+    amex: "liability",
+    discover: "liability",
+    "outside-payments": "external"
+  };
+
+  // First match wins. Edit this table to change categorization.
+  const CATEGORY_RULES = [
+    { contains: "payroll", category: "income" },
+    { contains: "trader joe", category: "groceries" },
+    { contains: "whole foods", category: "groceries" },
+    { contains: "shell", category: "transportation" },
+    { contains: "uber", category: "transportation" },
+    { contains: "netflix", category: "subscriptions" },
+    { contains: "spotify", category: "subscriptions" },
+    { contains: "rent", category: "housing" },
+    { contains: "electric", category: "utilities" },
+    { contains: "water", category: "utilities" },
+    { contains: "chipotle", category: "dining" },
+    { contains: "coffee", category: "dining" },
+    { contains: "cvs", category: "health" },
+    { contains: "bookshop", category: "shopping" },
+    { contains: "cinema", category: "entertainment" }
+  ];
+
+  const TYPING_RULES = [
+    { contains: "payroll", direction: "in", merchant: "Employer Payroll" },
+    {
+      contains: "transfer to savings",
+      direction: "transfer",
+      merchant: "Savings Transfer",
+      transferAccount: "savings"
+    },
+    {
+      contains: "vanguard buy",
+      direction: "transfer",
+      merchant: "Vanguard",
+      transferAccount: "vanguard"
+    },
+    {
+      contains: "outside payment reimbursement",
+      direction: "transfer",
+      merchant: "Outside Payments Reimbursement",
+      transferAccount: "outside-payments"
+    },
+    {
+      contains: "parents reimbursement",
+      direction: "transfer",
+      merchant: "Outside Payments Reimbursement",
+      transferAccount: "outside-payments"
+    }
+  ];
+
+  const AMBIGUOUS_MERCHANTS = ["venmo", "paypal", "cash app", "zelle"];
+
+  const VALID_ACCOUNT_TYPES = new Set([
+    "cash",
+    "investment",
+    "liability",
+    "external"
+  ]);
+
+  function cleanMerchant(rawMerchant) {
+    return String(rawMerchant || "")
+      .replace(/\s+#?\d{3,}$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  function findSubstringRule(value, rules) {
+    const normalized = String(value || "").toLowerCase();
+    return rules.find((rule) => {
+      const phrase = rule.contains.toLowerCase();
+      const start = normalized.indexOf(phrase);
+      if (start === -1) return false;
+      const before = normalized[start - 1] || "";
+      const after = normalized[start + phrase.length] || "";
+      return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
+    });
+  }
+
+  function categoryFor(merchant) {
+    const match = findSubstringRule(merchant, CATEGORY_RULES);
+    return match ? match.category : "uncategorized";
+  }
+
+  function resolveAccountTypes(override) {
+    if (override && typeof override === "object" && Object.keys(override).length) {
+      return override;
+    }
+    return ACCOUNT_TYPES;
+  }
+
+  function normalizeTransaction(raw, accountTypesOverride) {
+    const accountTypes = resolveAccountTypes(accountTypesOverride);
+    const typingRule = findSubstringRule(raw.rawMerchant, TYPING_RULES);
+    const ambiguous = AMBIGUOUS_MERCHANTS.some((name) =>
+      String(raw.rawMerchant || "").toLowerCase().includes(name)
+    );
+    const accountType = accountTypes[raw.account];
+    if (!accountType) throw new Error(`Unknown account: ${raw.account}`);
+    if (!VALID_ACCOUNT_TYPES.has(accountType)) {
+      throw new Error(`Invalid account type for ${raw.account}: ${accountType}`);
+    }
+
+    let direction = typingRule ? typingRule.direction : "out";
+    if (ambiguous && !typingRule) direction = "";
+
+    // Prefer an explicit direction hint from import/SimpleFIN when not ambiguous.
+    if (!typingRule && !ambiguous && raw.directionHint) {
+      const hint = String(raw.directionHint);
+      if (hint === "in" || hint === "out" || hint === "transfer") direction = hint;
+    }
+
+    const merchant = typingRule?.merchant || cleanMerchant(raw.rawMerchant);
+    const savingsHint =
+      accountTypes.savings
+        ? "savings"
+        : accountTypes["uwcu-savings"]
+          ? "uwcu-savings"
+          : "";
+
+    return {
+      id: String(raw.id),
+      account: raw.account,
+      accountType,
+      direction,
+      category: direction && direction !== "transfer" ? categoryFor(merchant) : "",
+      merchant,
+      amount: Math.abs(Number(raw.amount)),
+      date: raw.date,
+      needsReview:
+        ambiguous || (!typingRule && direction !== "out" && direction !== "in"),
+      transferAccount: typingRule?.transferAccount || "",
+      suggestedTransferAccount: ambiguous ? savingsHint : ""
+    };
+  }
+
+  function normalizeTransactions(rows, accountTypesOverride) {
+    return rows.map((row) => normalizeTransaction(row, accountTypesOverride));
+  }
+
+  return {
+    ACCOUNT_TYPES,
+    VALID_ACCOUNT_TYPES,
+    CATEGORY_RULES,
+    TYPING_RULES,
+    AMBIGUOUS_MERCHANTS,
+    categoryFor,
+    cleanMerchant,
+    normalizeTransaction,
+    normalizeTransactions
+  };
+});
+
+  </script>
+  <script>
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.MoneyModel = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  // Live hub snapshots must supply openings/types from the account registry.
+  // Demo openings live only in tests / mock-shelf — never silently merge here.
+  const DEFAULT_CONFIG = {
+    asOfDate: null,
+    weeklySavingsTarget: 300,
+    bills: [],
+    openingBalances: {},
+    accountTypes: {}
+  };
+
+  /** Offline/sample fixture only — not applied unless a caller passes it in. */
+  const SAMPLE_FIXTURE = {
+    asOfDate: "2026-08-05",
+    openingBalances: {
+      checking: 6200,
+      savings: 12000,
+      vanguard: 28000,
+      amex: 0,
+      discover: 0,
+      "outside-payments": 0
+    },
+    accountTypes: {
+      checking: "cash",
+      savings: "cash",
+      vanguard: "investment",
+      amex: "liability",
+      discover: "liability",
+      "outside-payments": "external"
+    }
+  };
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const MONTH_NAMES =
+    "january|february|march|april|may|june|july|august|september|october|november|december|" +
+    "jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec";
+
+  function roundMoney(value) {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  }
+
+  function parseDate(date) {
+    return new Date(`${date}T12:00:00Z`);
+  }
+
+  function toDateString(date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  function addDays(date, days) {
+    return new Date(date.getTime() + days * DAY_MS);
+  }
+
+  function daysBetween(left, right) {
+    return Math.round((parseDate(right) - parseDate(left)) / DAY_MS);
+  }
+
+  function merchantKey(merchant) {
+    return String(merchant || "").trim().toLowerCase();
+  }
+
+  function streamKey(merchant, direction) {
+    const raw = merchantKey(merchant);
+    if (direction === "in") return raw;
+    return raw
+      .replace(new RegExp(`\\b(${MONTH_NAMES})\\b`, "g"), " ")
+      .replace(/\b(20)?\d{2}\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim() || raw;
+  }
+
+  function median(values) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2
+      ? sorted[middle]
+      : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  function amountsAreSimilar(left, right) {
+    return Math.abs(left - right) <= Math.max(2, Math.max(left, right) * 0.05);
+  }
+
+  function cadenceFromGaps(gaps) {
+    if (!gaps.length) return null;
+    const mid = median(gaps);
+    if (mid >= 5 && mid <= 9) return { days: Math.round(mid), label: "weekly" };
+    if (mid >= 12 && mid <= 17) return { days: Math.round(mid), label: "biweekly" };
+    if (mid >= 25 && mid <= 36) return { days: Math.round(mid), label: "monthly" };
+    if (mid >= 55 && mid <= 75) return { days: Math.round(mid), label: "bimonthly" };
+    return null;
+  }
+
+  function detectRecurringStreams(transactions, direction) {
+    const groups = new Map();
+    transactions
+      .filter((tx) => tx.direction === direction && Number.isFinite(tx.amount))
+      .forEach((tx) => {
+        if (direction === "out" && !tx.category) return;
+        const key = streamKey(tx.merchant, direction);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(tx);
+      });
+
+    const streams = [];
+    groups.forEach((items, key) => {
+      const sorted = [...items].sort((a, b) => a.date.localeCompare(b.date));
+      const matching = [];
+      const gaps = [];
+      for (let index = 1; index < sorted.length; index += 1) {
+        const days = daysBetween(sorted[index - 1].date, sorted[index].date);
+        if (amountsAreSimilar(sorted[index].amount, sorted[index - 1].amount)) {
+          const cadence = cadenceFromGaps([days]);
+          if (cadence) {
+            matching.push(sorted[index - 1], sorted[index]);
+            gaps.push(days);
+          }
+        }
+      }
+      const unique = [...new Map(matching.map((item) => [item.id, item])).values()];
+      const cadence = cadenceFromGaps(gaps);
+      if (unique.length >= 2 && cadence) {
+        const last = unique[unique.length - 1];
+        streams.push({
+          merchant: unique[0].merchant,
+          key,
+          direction,
+          amount: roundMoney(median(unique.map((item) => item.amount))),
+          cadenceDays: cadence.days,
+          cadenceLabel: cadence.label,
+          lastDate: last.date,
+          occurrences: unique.length,
+          transactionIds: unique.map((item) => item.id)
+        });
+      }
+    });
+    return streams.sort((a, b) => b.amount - a.amount);
+  }
+
+  function detectRecurring(transactions) {
+    return detectRecurringStreams(transactions, "out").map((stream) => ({
+      merchant: stream.merchant,
+      key: stream.key,
+      amount: stream.amount,
+      occurrences: stream.occurrences,
+      transactionIds: stream.transactionIds,
+      cadenceDays: stream.cadenceDays,
+      cadenceLabel: stream.cadenceLabel,
+      lastDate: stream.lastDate
+    }));
+  }
+
+  function weekBounds(asOfDate) {
+    const date = parseDate(asOfDate);
+    const day = date.getUTCDay();
+    const daysSinceMonday = day === 0 ? 6 : day - 1;
+    const start = new Date(date.getTime() - daysSinceMonday * DAY_MS);
+    const end = new Date(start.getTime() + 7 * DAY_MS);
+    return { start, end };
+  }
+
+  function isInRange(date, start, end) {
+    const value = parseDate(date);
+    return value >= start && value < end;
+  }
+
+  /**
+   * Pay period = last payday → next payday.
+   * Falls back to the calendar week when income cadence is unknown.
+   */
+  function payPeriodBounds(incomeStreams, asOfDate) {
+    const asOf = parseDate(asOfDate);
+    const primary = incomeStreams[0];
+    if (!primary) {
+      const week = weekBounds(asOfDate);
+      return {
+        start: week.start,
+        end: week.end,
+        source: "calendar-week",
+        nextPayday: toDateString(addDays(week.end, -1))
+      };
+    }
+
+    let cursor = parseDate(primary.lastDate);
+    const cadence = primary.cadenceDays;
+    while (addDays(cursor, cadence) <= asOf) {
+      cursor = addDays(cursor, cadence);
+    }
+    // cursor is the most recent payday on or before asOf (or last observed if
+    // lastDate is still ahead — clamp to lastDate when asOf is before it).
+    if (cursor > asOf) {
+      cursor = parseDate(primary.lastDate);
+      while (cursor > asOf && cadence > 0) {
+        cursor = addDays(cursor, -cadence);
+      }
+    }
+    const end = addDays(cursor, cadence);
+    return {
+      start: cursor,
+      end,
+      source: "income-cadence",
+      nextPayday: toDateString(end)
+    };
+  }
+
+  /**
+   * Project stream due dates that fall in [start, end).
+   * Walks backward/forward from lastDate so overlapping cycles are included
+   * even when the last charge was just before the pay period started.
+   */
+  function occurrencesInPeriod(stream, start, end) {
+    const cadence = stream.cadenceDays;
+    if (!cadence) return [];
+    let cursor = parseDate(stream.lastDate);
+    while (cursor > start) cursor = addDays(cursor, -cadence);
+    while (cursor < start) cursor = addDays(cursor, cadence);
+
+    const dates = [];
+    while (cursor < end) {
+      dates.push(toDateString(cursor));
+      cursor = addDays(cursor, cadence);
+    }
+    return dates;
+  }
+
+  function billDueDatesInPeriod(bills, start, end) {
+    const list = Array.isArray(bills) ? bills : [];
+    const dues = [];
+    list.forEach((bill) => {
+      if (!bill || bill.active === false) return;
+      const amount = Number(bill.amount) || 0;
+      if (amount <= 0) return;
+      const dueDay = Math.max(1, Math.min(31, Number(bill.dueDay) || 1));
+
+      let year = start.getUTCFullYear();
+      let month = start.getUTCMonth();
+      // Cover the months that the period can touch.
+      for (let offset = -1; offset <= 2; offset += 1) {
+        let m = month + offset;
+        let y = year;
+        while (m < 0) {
+          m += 12;
+          y -= 1;
+        }
+        while (m > 11) {
+          m -= 12;
+          y += 1;
+        }
+        const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+        const day = Math.min(dueDay, last);
+        const due = new Date(Date.UTC(y, m, day, 12, 0, 0));
+        const periodKey = `${y}-${String(m + 1).padStart(2, "0")}`;
+        if (bill.lastPaidFor === periodKey) continue;
+        if (due >= start && due < end) {
+          dues.push({
+            title: bill.title,
+            amount: roundMoney(amount),
+            date: toDateString(due),
+            source: "bill"
+          });
+        }
+      }
+    });
+    return dues;
+  }
+
+  function accountDeltaForActivity(accountType, direction, amount) {
+    if (accountType === "cash" || accountType === "investment") {
+      return direction === "in" ? amount : -amount;
+    }
+    if (accountType === "liability" || accountType === "external") {
+      return direction === "out" ? amount : -amount;
+    }
+    return 0;
+  }
+
+  function isCashLikeHolding(holding) {
+    const symbol = String(holding?.symbol || "").trim().toUpperCase();
+    const description = String(holding?.description || "").toLowerCase();
+    if (!symbol && !description) return false;
+    if (
+      symbol === "VMFXX" ||
+      symbol === "USD" ||
+      symbol === "CASH" ||
+      symbol === "SPAXX" ||
+      symbol === "FDRXX"
+    ) {
+      return true;
+    }
+    return /money\s*market|settlement\s*fund|sweep|cash\s*reserves|\bcash\b/.test(
+      description
+    );
+  }
+
+  function normalizeHoldings(rawHoldings) {
+    if (!Array.isArray(rawHoldings)) return [];
+    return rawHoldings
+      .map((holding) => ({
+        id: holding.id || null,
+        symbol: String(holding.symbol || "").trim(),
+        description: String(holding.description || "").trim(),
+        marketValue: roundMoney(Number(holding.market_value ?? holding.marketValue) || 0),
+        shares: Number(holding.shares) || 0,
+        currency: holding.currency || "USD"
+      }))
+      .filter((holding) => holding.marketValue !== 0 || holding.shares !== 0);
+  }
+
+  /**
+   * Split an account balance into cash-like vs invested using SimpleFIN holdings.
+   * Scales to the live account balance when holdings sum drifts slightly.
+   */
+  function splitBalanceByHoldings(balance, holdings) {
+    const list = normalizeHoldings(holdings);
+    if (!list.length) {
+      return { cash: 0, invested: roundMoney(balance), holdings: [] };
+    }
+    let cash = 0;
+    let invested = 0;
+    const classified = list.map((holding) => {
+      const cashLike = isCashLikeHolding(holding);
+      if (cashLike) cash += holding.marketValue;
+      else invested += holding.marketValue;
+      return { ...holding, cashLike };
+    });
+    const sum = cash + invested;
+    if (sum > 0 && Number.isFinite(balance) && Math.abs(sum - balance) > 0.05) {
+      const scale = balance / sum;
+      cash = roundMoney(cash * scale);
+      invested = roundMoney(balance - cash);
+    } else {
+      cash = roundMoney(cash);
+      invested = roundMoney(invested);
+    }
+    return { cash, invested, holdings: classified };
+  }
+
+  function allocateAccountTotals(accountId, balance, type, holdingsByAccount) {
+    const holdings = holdingsByAccount?.[accountId];
+    if (
+      (type === "investment" || type === "cash") &&
+      Array.isArray(holdings) &&
+      holdings.length
+    ) {
+      const split = splitBalanceByHoldings(balance, holdings);
+      return {
+        liquid: split.cash,
+        invested: split.invested,
+        liabilities: 0,
+        owed: 0,
+        split
+      };
+    }
+    return {
+      liquid: type === "cash" ? balance : 0,
+      invested: type === "investment" ? balance : 0,
+      liabilities: type === "liability" || type === "external" ? balance : 0,
+      owed: type === "external" ? balance : 0,
+      split: null
+    };
+  }
+
+  function sourceTransferDelta(accountType, amount) {
+    return accountType === "liability" || accountType === "external" ? amount : -amount;
+  }
+
+  function targetTransferDelta(accountType, amount) {
+    return accountType === "liability" || accountType === "external" ? -amount : amount;
+  }
+
+  function computeSafeToSpend(effectiveTransactions, config) {
+    const incomeStreams = detectRecurringStreams(effectiveTransactions, "in");
+    const expenseStreams = detectRecurringStreams(effectiveTransactions, "out");
+    const { start, end, source, nextPayday } = payPeriodBounds(
+      incomeStreams,
+      config.asOfDate
+    );
+    const asOf = parseDate(config.asOfDate);
+    const horizonEnd = end < asOf ? addDays(asOf, 7) : end;
+    const periodStart = start;
+    const periodEnd = horizonEnd;
+
+    const incomeReceived = effectiveTransactions
+      .filter((tx) => tx.direction === "in" && isInRange(tx.date, periodStart, addDays(asOf, 1)))
+      .reduce((sum, tx) => sum + tx.amount, 0);
+
+    const incomeExpected = incomeStreams.reduce((sum, stream) => {
+      return (
+        sum +
+        occurrencesInPeriod(stream, addDays(asOf, 1), periodEnd).length * stream.amount
+      );
+    }, 0);
+
+    const periodIncome = incomeReceived + incomeExpected;
+
+    const recurringKeys = new Set(expenseStreams.map((stream) => stream.key));
+    const commitmentRows = [];
+
+    expenseStreams.forEach((stream) => {
+      occurrencesInPeriod(stream, periodStart, periodEnd).forEach((date) => {
+        commitmentRows.push({
+          title: stream.merchant,
+          amount: stream.amount,
+          date,
+          source: "recurring"
+        });
+      });
+    });
+
+    billDueDatesInPeriod(config.bills, periodStart, periodEnd).forEach((due) => {
+      // Skip bills that already match a detected recurring stream by amount+near date.
+      const duplicate = commitmentRows.some(
+        (row) =>
+          amountsAreSimilar(row.amount, due.amount) &&
+          Math.abs(daysBetween(row.date, due.date)) <= 3
+      );
+      if (!duplicate) commitmentRows.push(due);
+    });
+
+    const committed = commitmentRows.reduce((sum, row) => sum + row.amount, 0);
+
+    const variableAlreadySpent = effectiveTransactions
+      .filter(
+        (tx) =>
+          tx.direction === "out" &&
+          isInRange(tx.date, periodStart, addDays(asOf, 1)) &&
+          !recurringKeys.has(streamKey(tx.merchant, "out"))
+      )
+      .reduce((sum, tx) => sum + tx.amount, 0);
+
+    const horizonDays = Math.max(
+      1,
+      Math.round((periodEnd.getTime() - periodStart.getTime()) / DAY_MS)
+    );
+    const savingsTarget =
+      (Number(config.weeklySavingsTarget) || 0) * (horizonDays / 7);
+
+    const remaining =
+      periodIncome - committed - savingsTarget - variableAlreadySpent;
+
+    return {
+      period: `${toDateString(periodStart)} / ${toDateString(addDays(periodEnd, -1))}`,
+      periodSource: source,
+      nextPayday,
+      horizonDays,
+      income: roundMoney(periodIncome),
+      incomeReceived: roundMoney(incomeReceived),
+      incomeExpected: roundMoney(incomeExpected),
+      // Back-compat for older shelf/phone payloads.
+      weeklyIncome: roundMoney(periodIncome),
+      committed: roundMoney(committed),
+      commitments: commitmentRows
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((row) => ({
+          ...row,
+          amount: roundMoney(row.amount)
+        })),
+      savingsTarget: roundMoney(savingsTarget),
+      spent: roundMoney(variableAlreadySpent),
+      remaining: roundMoney(remaining),
+      incomeStreams,
+      expenseStreams
+    };
+  }
+
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /**
+   * Net balance delta from transactions for one account (opening excluded).
+   * Used to reconcile SimpleFIN's reported balance → openingBalance.
+   */
+  function accountActivityDelta(transactions, accountId, accountType, accountTypes) {
+    let delta = 0;
+    (transactions || []).forEach((tx) => {
+      if (!tx.direction || !Number.isFinite(tx.amount)) return;
+      if (tx.direction === "transfer") {
+        const target = tx.transferAccount || tx.suggestedTransferAccount;
+        if (tx.account === accountId) {
+          delta += sourceTransferDelta(accountType || tx.accountType, tx.amount);
+        }
+        if (target === accountId) {
+          delta += targetTransferDelta(
+            accountTypes?.[accountId] || accountType,
+            tx.amount
+          );
+        }
+        return;
+      }
+      if (tx.account !== accountId) return;
+      delta += accountDeltaForActivity(
+        accountType || tx.accountType,
+        tx.direction,
+        tx.amount
+      );
+    });
+    return roundMoney(delta);
+  }
+
+  function openingFromRemoteBalance(remoteBalance, activityDelta) {
+    return roundMoney(Number(remoteBalance) - Number(activityDelta || 0));
+  }
+
+  function computeSnapshot(transactions, suppliedConfig) {
+    const config = {
+      ...DEFAULT_CONFIG,
+      ...suppliedConfig,
+      openingBalances: { ...(suppliedConfig?.openingBalances || {}) },
+      accountTypes: { ...(suppliedConfig?.accountTypes || {}) },
+      bills: suppliedConfig?.bills || DEFAULT_CONFIG.bills,
+      asOfDate: suppliedConfig?.asOfDate || DEFAULT_CONFIG.asOfDate || todayIso(),
+      accountHoldings: { ...(suppliedConfig?.accountHoldings || {}) }
+    };
+    // Only registered accounts — never invent checking/savings/vanguard ghosts.
+    const balances = {};
+    Object.keys(config.accountTypes).forEach((accountId) => {
+      balances[accountId] = Number(config.openingBalances[accountId]) || 0;
+    });
+    const spendingByCategory = {};
+    const spendingByCategoryAll = {};
+    let income = 0;
+    let expenses = 0;
+    let expensesThisMonth = 0;
+    let incomeThisMonth = 0;
+    const asOf = parseDate(config.asOfDate);
+    const monthKey = config.asOfDate.slice(0, 7);
+    const effectiveTransactions = transactions.filter(
+      (tx) => parseDate(tx.date) <= asOf
+    );
+
+    effectiveTransactions.forEach((tx) => {
+      if (!tx.direction || !Number.isFinite(tx.amount)) return;
+      const knownAccount = tx.account in config.accountTypes;
+      const inMonth = tx.date.slice(0, 7) === monthKey;
+
+      if (tx.direction === "transfer") {
+        const target = tx.transferAccount || tx.suggestedTransferAccount;
+        if (!target || !config.accountTypes[target] || target === tx.account) return;
+        if (!knownAccount) return;
+        balances[tx.account] += sourceTransferDelta(tx.accountType, tx.amount);
+        balances[target] += targetTransferDelta(config.accountTypes[target], tx.amount);
+        return;
+      }
+
+      if (knownAccount) {
+        balances[tx.account] += accountDeltaForActivity(
+          tx.accountType,
+          tx.direction,
+          tx.amount
+        );
+      }
+      if (tx.direction === "in") {
+        income += tx.amount;
+        if (inMonth) incomeThisMonth += tx.amount;
+      }
+      if (tx.direction === "out") {
+        expenses += tx.amount;
+        const category = tx.category || "uncategorized";
+        spendingByCategoryAll[category] =
+          (spendingByCategoryAll[category] || 0) + tx.amount;
+        if (inMonth) {
+          expensesThisMonth += tx.amount;
+          spendingByCategory[category] =
+            (spendingByCategory[category] || 0) + tx.amount;
+        }
+      }
+    });
+
+    const holdingBreakdown = {};
+    const totals = Object.entries(balances).reduce(
+      (result, [account, balance]) => {
+        const type = config.accountTypes[account];
+        const allocated = allocateAccountTotals(
+          account,
+          balance,
+          type,
+          config.accountHoldings
+        );
+        result.liquid += allocated.liquid;
+        result.invested += allocated.invested;
+        result.liabilities += allocated.liabilities;
+        result.owed += allocated.owed;
+        if (allocated.split) {
+          holdingBreakdown[account] = {
+            cash: allocated.split.cash,
+            invested: allocated.split.invested,
+            holdings: allocated.split.holdings
+          };
+        }
+        return result;
+      },
+      { liquid: 0, invested: 0, liabilities: 0, owed: 0 }
+    );
+
+    const safe = computeSafeToSpend(effectiveTransactions, config);
+    const recurring = safe.expenseStreams.map((stream) => ({
+      merchant: stream.merchant,
+      key: stream.key,
+      amount: stream.amount,
+      occurrences: stream.occurrences,
+      transactionIds: stream.transactionIds,
+      cadenceDays: stream.cadenceDays,
+      cadenceLabel: stream.cadenceLabel,
+      lastDate: stream.lastDate
+    }));
+    const recurringMonthly = recurring.reduce((sum, item) => {
+      if (item.cadenceLabel === "weekly") return sum + item.amount * 4.345;
+      if (item.cadenceLabel === "biweekly") return sum + item.amount * (365 / 14 / 12);
+      if (item.cadenceLabel === "bimonthly") return sum + item.amount / 2;
+      return sum + item.amount;
+    }, 0);
+
+    const monthsCovered = new Set(
+      effectiveTransactions
+        .filter((tx) => tx.direction === "out")
+        .map((tx) => tx.date.slice(0, 7))
+    ).size;
+    const avgMonthlyExpenses = monthsCovered ? expenses / monthsCovered : 0;
+
+    Object.keys(balances).forEach((key) => {
+      balances[key] = roundMoney(balances[key]);
+    });
+    Object.keys(spendingByCategory).forEach((key) => {
+      spendingByCategory[key] = roundMoney(spendingByCategory[key]);
+    });
+    Object.keys(spendingByCategoryAll).forEach((key) => {
+      spendingByCategoryAll[key] = roundMoney(spendingByCategoryAll[key]);
+    });
+
+    return {
+      balances,
+      holdingBreakdown,
+      netWorth: roundMoney(totals.liquid + totals.invested - totals.liabilities),
+      liquid: roundMoney(totals.liquid),
+      invested: roundMoney(totals.invested),
+      liabilities: roundMoney(totals.liabilities),
+      owed: roundMoney(totals.owed),
+      income: roundMoney(income),
+      incomeThisMonth: roundMoney(incomeThisMonth),
+      expenses: roundMoney(expenses),
+      expensesThisMonth: roundMoney(expensesThisMonth),
+      spendingMonth: monthKey,
+      savingsRate: income ? (income - expenses) / income : 0,
+      spendingByCategory,
+      spendingByCategoryAll,
+      recurring,
+      recurringMonthly: roundMoney(recurringMonthly),
+      avgMonthlyExpenses: roundMoney(avgMonthlyExpenses),
+      runwayMonths: avgMonthlyExpenses ? totals.liquid / avgMonthlyExpenses : 0,
+      safeToSpend: {
+        period: safe.period,
+        periodSource: safe.periodSource,
+        nextPayday: safe.nextPayday,
+        horizonDays: safe.horizonDays,
+        income: safe.income,
+        incomeReceived: safe.incomeReceived,
+        incomeExpected: safe.incomeExpected,
+        weeklyIncome: safe.weeklyIncome,
+        committed: safe.committed,
+        commitments: safe.commitments,
+        savingsTarget: safe.savingsTarget,
+        spent: safe.spent,
+        remaining: safe.remaining
+      }
+    };
+  }
+
+  return {
+    DEFAULT_CONFIG,
+    SAMPLE_FIXTURE,
+    computeSnapshot,
+    detectRecurring,
+    detectRecurringStreams,
+    payPeriodBounds,
+    weekBounds,
+    accountActivityDelta,
+    openingFromRemoteBalance,
+    isCashLikeHolding,
+    normalizeHoldings,
+    splitBalanceByHoldings,
+    todayIso
+  };
+});
+
+  </script>
+  <script>
+  "use strict";
+
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const money2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+
+  function escapeHtml(value) {
+    const el = document.createElement("span");
+    el.textContent = value == null ? "" : String(value);
+    return el.innerHTML;
+  }
+
+  function actionId(prefix) {
+    const suffix = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : Date.now() + "-" + Math.random().toString(16).slice(2);
+    return prefix + ":" + suffix;
+  }
+
+  const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
+
+  document.querySelectorAll(".tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
+      document.querySelector("#tab-" + btn.dataset.tab).classList.add("on");
+    });
+  });
+
+  function renderMoney() {
+    const snap = state.snapshot;
+    if (!snap) {
+      document.querySelector("#safe-detail").textContent = "No snapshot yet — sync with the hub";
+      return;
+    }
+    const safe = snap.safeToSpend || {};
+    const el = document.querySelector("#safe-value");
+    el.textContent = money.format(safe.remaining || 0);
+    el.classList.toggle("neg", (safe.remaining || 0) < 0);
+    document.querySelector("#safe-label").textContent = safe.nextPayday
+      ? "Safe to spend until " + safe.nextPayday
+      : "Safe to spend";
+    document.querySelector("#safe-detail").textContent =
+      money.format(safe.income ?? safe.weeklyIncome ?? 0) + " in − " +
+      money.format(safe.committed || 0) + " committed − " +
+      money.format(safe.savingsTarget || 0) + " savings − " +
+      money.format(safe.spent || 0) + " spent";
+    document.querySelector("#m-nw").textContent = money.format(snap.netWorth || 0);
+    document.querySelector("#m-liq").textContent = money.format(snap.liquid || 0);
+    document.querySelector("#m-owed").textContent = money.format(snap.owed || 0);
+    document.querySelector("#m-run").textContent = (snap.runwayMonths || 0).toFixed(1) + " mo";
+
+    const upcoming = Object.fromEntries((state.billsUpcoming || []).map((r) => [r.billId, r]));
+    document.querySelector("#bills-list").innerHTML = state.bills.length
+      ? state.bills.map((b) => {
+          const u = upcoming[b.id];
+          const when = u?.remind ? u.label : ("day " + b.dueDay);
+          return '<div class="row"><span><strong>' + escapeHtml(b.title) +
+            (b.active ? "" : " · off") + '</strong><br><span class="muted">' +
+            escapeHtml(when) + '</span></span><strong>' +
+            (b.amount > 0 ? money2.format(b.amount) : "set $") +
+            '</strong></div>';
+        }).join("")
+      : '<div class="empty">No bills — add rent below</div>';
+
+    const needs = state.transactions.filter((t) => t.needsReview).length;
+    document.querySelector("#review-count").textContent = needs ? "(" + needs + " need review)" : "";
+    const rows = state.transactions.slice(0, 40);
+    document.querySelector("#tx-list").innerHTML = rows.length
+      ? rows.map((tx) => {
+          return '<div class="row"><span><strong>' + escapeHtml(tx.merchant || tx.rawMerchant) +
+            '</strong><br><span class="muted">' + escapeHtml(tx.date) + " · " +
+            escapeHtml(state.labels[tx.account] || tx.account) +
+            (tx.needsReview ? " · review" : "") +
+            '</span></span><span>' + money2.format(tx.amount || 0) +
+            '<br><select data-tx="' + escapeHtml(tx.id) + '" class="tx-dir">' +
+            '<option value="">Review…</option>' +
+            '<option value="in"' + (tx.direction === "in" ? " selected" : "") + '>Income</option>' +
+            '<option value="out"' + (tx.direction === "out" ? " selected" : "") + '>Expense</option>' +
+            '<option value="transfer"' + (tx.direction === "transfer" ? " selected" : "") + '>Transfer</option>' +
+            '</select></span></div>';
+        }).join("")
+      : '<div class="empty">No transactions synced</div>';
+  }
+
+  function actionButtons(actions) {
+    if (!actions || !actions.length) return "";
+    const labels = {
+      "bill.paid": "Paid",
+      "rsvp.yes": "Going",
+      "rsvp.no": "Not going",
+      "task.complete": "Done",
+      "calendar.add": "Calendar",
+      dismiss: "Dismiss",
+      ack: "Ack",
+      unsubscribe: "Run"
+    };
+    return actions.map((a) => {
+      return '<button type="button" class="tiny digest-action" data-type="' +
+        escapeHtml(a.type) + '" data-ref="' +
+        escapeHtml(JSON.stringify(a.targetRef || {})) + '">' +
+        escapeHtml(labels[a.type] || a.type) + "</button>";
+    }).join("");
+  }
+
+  function fillList(id, items, mapper, empty) {
+    const root = document.querySelector("#" + id);
+    if (!items.length) {
+      root.innerHTML = '<div class="empty">' + empty + "</div>";
+      return;
+    }
+    root.innerHTML = items.map(mapper).join("");
+  }
+
+  async function loadDigest() {
+    const digest = await Shelf.data.get("digest");
+    if (!digest) {
+      document.querySelector("#digest-status").textContent = "No digest yet";
+      fillList("today", [], null, "Nothing today");
+      fillList("watching", [], null, "Nothing watching");
+      fillList("reading", [], null, "No reading");
+      fillList("junk", [], null, "No junk");
+      return;
+    }
+    fillList("today", digest.today || [], (item) => {
+      const when = item.dueAt || item.start || "";
+      return '<div class="row" style="flex-direction:column;align-items:stretch">' +
+        "<div><strong>" + escapeHtml(item.kind) +
+        (item.domain ? " · " + escapeHtml(item.domain) : "") +
+        " · " + escapeHtml(item.title || item.name) +
+        '</strong><div class="muted">' + escapeHtml(when) + "</div></div>" +
+        actionButtons(item.actions) + "</div>";
+    }, "Nothing today");
+    fillList("watching", digest.watching || [], (item) =>
+      '<div class="row"><span>not going · ' + escapeHtml(item.title || item.name) +
+      "</span></div>", "Nothing watching");
+    fillList("reading", digest.reading || [], (item) =>
+      '<div class="row"><a href="' + escapeHtml(item.url) + '" rel="noreferrer">' +
+      escapeHtml(item.title || item.url) + "</a></div>", "No reading");
+    fillList("junk", digest.junk || [], (item) =>
+      '<div class="row"><span>' + escapeHtml(item.action) + " · " +
+      escapeHtml(item.status || "pending") + "</span>" +
+      (item.status === "pending"
+        ? actionButtons([{ type: "unsubscribe", targetRef: item.targetRef || { itemId: item.id } }])
+        : "") + "</div>", "No junk");
+    document.querySelector("#digest-status").textContent =
+      "Updated " + (digest.generatedAt || "now") +
+      " · " + (digest.today || []).length + " today · " +
+      (digest.watching || []).length + " watching";
+  }
+
+  async function refreshMoney() {
+    const [txPayload, snap, billsPayload] = await Promise.all([
+      Shelf.data.get("transactions"),
+      Shelf.data.get("snapshot"),
+      (Shelf.bills?.list ? Shelf.bills.list() : Shelf.data.get("bills")).catch(() => null)
+    ]);
+    const rows = txPayload?.transactions ?? txPayload?.rows ?? [];
+    state.transactions = rows.map((r) => ({ ...r }));
+    state.snapshot = snap;
+    state.bills = billsPayload?.bills || [];
+    state.billsUpcoming = billsPayload?.upcoming || [];
+    const accounts = txPayload?.accounts || [];
+    state.labels = Object.fromEntries(accounts.map((a) => [a.id, a.label || a.id]));
+    if (!Object.keys(state.labels).length && snap?.balances) {
+      Object.keys(snap.balances).forEach((id) => { state.labels[id] = id; });
+    }
+    renderMoney();
+    document.querySelector("#money-status").textContent =
+      rows.length + " transactions · as of " + (txPayload?.asOfDate || "—");
+  }
+
+  document.querySelector("#bill-add").addEventListener("click", async () => {
+    const title = document.querySelector("#bill-title").value.trim();
+    if (!title) return;
+    const amount = Number(document.querySelector("#bill-amount").value) || 0;
+    const dueDay = Number(document.querySelector("#bill-due").value) || 1;
+    const leadDays = Number(document.querySelector("#bill-lead").value) || 5;
+    const id = "bill:" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    try {
+      if (Shelf.bills?.create) {
+        await Shelf.bills.create({ id, title, amount, dueDay, leadDays, active: true });
+      } else {
+        await Shelf.outbox.push({
+          id: actionId("bill"),
+          type: "action.bills.upsert",
+          source: "shelf-app",
+          collectedAt: new Date().toISOString(),
+          data: { id, title, amount, dueDay, leadDays, active: true }
+        });
+      }
+      document.querySelector("#bill-title").value = "";
+      document.querySelector("#bill-amount").value = "";
+      await refreshMoney();
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#tx-list").addEventListener("change", async (event) => {
+    const sel = event.target.closest(".tx-dir");
+    if (!sel) return;
+    const id = sel.dataset.tx;
+    const direction = sel.value;
+    const tx = state.transactions.find((t) => t.id === id);
+    if (!tx || !direction) return;
+    try {
+      await Shelf.outbox.push({
+        id: actionId("tx"),
+        type: "action.transaction.update",
+        source: "shelf-app",
+        collectedAt: new Date().toISOString(),
+        data: {
+          id,
+          direction,
+          category: direction === "out" ? (tx.category || "uncategorized") : "",
+          transferAccount: tx.transferAccount || ""
+        }
+      });
+      await refreshMoney();
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#digest-refresh").addEventListener("click", () => {
+    loadDigest().catch((e) => {
+      document.querySelector("#digest-status").textContent = e.message;
+    });
+  });
+
+  document.querySelector("#ai-propose").addEventListener("click", async () => {
+    const status = document.querySelector("#digest-status");
+    if (!Shelf.ai?.propose) {
+      status.textContent = "AI not available on this bridge";
+      return;
+    }
+    try {
+      await Shelf.ai.setMode("LOCAL");
+      const result = await Shelf.ai.propose();
+      status.textContent = "AI " + result.mode + ": " +
+        ((result.proposal?.flags || []).length) + " nudge(s)";
+      await loadDigest();
+    } catch (e) {
+      status.textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#tab-digest").addEventListener("click", async (event) => {
+    const button = event.target.closest(".digest-action");
+    if (!button) return;
+    let targetRef = {};
+    try { targetRef = JSON.parse(button.dataset.ref || "{}"); } catch (_e) {}
+    button.disabled = true;
+    try {
+      const type = button.dataset.type;
+      await Shelf.outbox.push({
+        id: actionId("digest:" + type),
+        type: type.startsWith("action.") ? type : "action." + type,
+        source: "shelf-app",
+        collectedAt: new Date().toISOString(),
+        data: { targetRef }
+      });
+      await loadDigest();
+    } catch (e) {
+      document.querySelector("#digest-status").textContent = e.message || String(e);
+      button.disabled = false;
+    }
+  });
+
+  async function boot() {
+    if (!window.Shelf || typeof Shelf.data?.get !== "function") {
+      throw new Error("window.Shelf is missing — open this file in Shelf or via the hub");
+    }
+    document.querySelector("#bridge").textContent = Shelf.__hub
+      ? "Hub relay · Money + Digest in one page"
+      : Shelf.__real
+        ? "Device Shelf · Money + Digest in one page"
+        : "Mock Shelf · preview only";
+    await refreshMoney();
+    await loadDigest();
+  }
+
+  boot().catch((error) => {
+    const box = document.querySelector("#boot-error");
+    box.hidden = false;
+    box.textContent = "Failed: " + (error.message || error);
+  });
+  </script>
+</body>
+</html>

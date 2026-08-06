@@ -85,15 +85,15 @@ async function main() {
   // Seeded sample data can surface deterministic money tasks (owed / safe-to-spend).
   assert.ok(
     digest.body.today.every((item) =>
-      ["task", "birthday", "event", "nudge"].includes(item.kind)
+      ["task", "birthday", "event", "nudge", "bill", "import"].includes(item.kind)
     )
   );
   const root = await request(port, "GET", "/");
   assert.equal(root.status, 302, "root must redirect so hub home relative scripts resolve");
-  assert.equal(root.headers.location, "/apps/hub/home.html");
-  const homePage = await request(port, "GET", "/apps/hub/home.html");
+  assert.equal(root.headers.location, "/apps/shelf/shelf.html");
+  const homePage = await request(port, "GET", "/apps/shelf/shelf.html");
   assert.equal(homePage.status, 200);
-  assert.match(homePage.text, /money\.html|Daily Digest|Money/i);
+  assert.match(homePage.text, /Money|Digest|Shelf/i);
   const moneyPage = await request(port, "GET", "/apps/money/money.html");
   assert.equal(moneyPage.status, 200);
   assert.match(moneyPage.text, /hub-shelf\.js/);

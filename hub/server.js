@@ -13,6 +13,9 @@ const simplefin = require("./connectors/simplefin.js");
 const ai = require("./ai.js");
 const pairing = require("./pairing.js");
 const importer = require("./import/index.js");
+const billsEngine = require("../engine/bills.js");
+const rewardsEngine = require("../engine/rewards.js");
+const rewardsWeb = require("./connectors/rewards-web.js");
 
 const ROOT = path.join(__dirname, "..");
 const PORT = Number(process.env.HUB_PORT || 8787);
@@ -79,7 +82,7 @@ function serveStatic(req, res, urlPath) {
   // from "/" and 404 (/shelf/... instead of /apps/shelf/...). Redirect instead.
   if (urlPath === "/") {
     res.writeHead(302, {
-      Location: "/apps/hub/home.html",
+      Location: "/apps/shelf/shelf.html",
       "Cache-Control": "no-store"
     });
     res.end();
@@ -134,7 +137,7 @@ function createServer(db, options = {}) {
             connectors: await secretStore.listConfiguredConnectors(),
             aiMode: ai.getAiMode(db),
             pairingPath: "/apps/hub/pairing.html",
-            homePath: "/apps/hub/home.html",
+            homePath: "/apps/shelf/shelf.html",
             lifeCapture: true
           });
         }
@@ -146,8 +149,6 @@ function createServer(db, options = {}) {
             rows: dbApi.listTransactions(db),
             asOfDate: settings.asOfDate,
             settings: {
-              monthlyIncome: settings.monthlyIncome,
-              weeklyIncome: settings.weeklyIncome,
               weeklySavingsTarget: settings.weeklySavingsTarget
             },
             accounts: dbApi.listAccounts(db)
@@ -174,18 +175,106 @@ function createServer(db, options = {}) {
           return sendJson(res, 200, { ok: true, account });
         }
 
+        if (req.method === "GET" && pathname === "/api/bills") {
+          const settings = dbApi.getSettings(db);
+          const bills = dbApi.listBills(db);
+          const upcoming = billsEngine.upcomingReminders(bills, settings.asOfDate, {
+            includeAll: true
+          });
+          return sendJson(res, 200, {
+            kind: "bills",
+            bills,
+            upcoming: upcoming.map((row) => ({
+              billId: row.bill.id,
+              title: row.bill.title,
+              amount: row.bill.amount,
+              dueAt: row.dueAt,
+              periodKey: row.periodKey,
+              daysUntil: row.daysUntil,
+              overdue: row.overdue,
+              remind: row.remind,
+              label: billsEngine.reminderTitle(row)
+            }))
+          });
+        }
+
+        if (req.method === "POST" && pathname === "/api/bills") {
+          const body = await readBody(req);
+          const id =
+            body.id ||
+            `bill:${String(body.title || "bill")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "")
+              .slice(0, 40)}`;
+          const bill = dbApi.upsertBill(db, { ...body, id });
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, { ok: true, bill });
+        }
+
+        if (req.method === "PATCH" && pathname.startsWith("/api/bills/")) {
+          const id = decodeURIComponent(pathname.slice("/api/bills/".length));
+          const body = await readBody(req);
+          const existing = dbApi.getBill(db, id);
+          if (!existing) return sendJson(res, 404, { error: "Bill not found" });
+          if (body.paid === true || body.markPaid === true) {
+            const settings = dbApi.getSettings(db);
+            const next = billsEngine.nextDueForBill(existing, settings.asOfDate);
+            const bill = dbApi.markBillPaid(
+              db,
+              id,
+              body.periodKey || next.periodKey
+            );
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, { ok: true, bill });
+          }
+          const bill = dbApi.upsertBill(db, { ...existing, ...body, id });
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, { ok: true, bill });
+        }
+
+        if (req.method === "DELETE" && pathname.startsWith("/api/bills/")) {
+          const id = decodeURIComponent(pathname.slice("/api/bills/".length));
+          dbApi.deleteBill(db, id);
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, { ok: true });
+        }
+
         if (req.method === "POST" && pathname === "/api/import") {
           const body = await readBody(req, { maxBytes: 8 * 1024 * 1024 });
-          if (!body.accountId || body.text == null) {
-            return sendJson(res, 400, { error: "accountId and text are required" });
+          if (!body.accountId || (body.text == null && body.base64 == null)) {
+            return sendJson(res, 400, {
+              error: "accountId and text (or base64 for PDF) are required"
+            });
           }
-          const result = importer.importText(db, {
+          const result = await importer.importText(db, {
             accountId: body.accountId,
             text: body.text,
-            format: body.format || "auto"
+            base64: body.base64,
+            format: body.format || "auto",
+            label: body.label || body.fileName || ""
           });
           await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, result);
+        }
+
+        if (req.method === "GET" && pathname === "/api/imports") {
+          return sendJson(res, 200, {
+            kind: "imports",
+            batches: dbApi.listImportBatches(db, 30)
+          });
+        }
+
+        if (req.method === "DELETE" && pathname.startsWith("/api/imports/")) {
+          const id = decodeURIComponent(pathname.slice("/api/imports/".length));
+          if (!id) return sendJson(res, 400, { error: "import id required" });
+          try {
+            const result = dbApi.deleteImportBatch(db, id);
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, result);
+          } catch (error) {
+            return sendJson(res, 404, { error: error.message || String(error) });
+          }
         }
 
         if (req.method === "POST" && pathname === "/api/simplefin/claim") {
@@ -255,7 +344,7 @@ function createServer(db, options = {}) {
           const result = await simplefin.syncToDb(db, {
             forceMock,
             fetchImpl: options.fetchImpl,
-            updateOpeningBalance: body.updateOpeningBalance === true
+            updateOpeningBalance: body.updateOpeningBalance !== false
           });
           await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, {
@@ -377,8 +466,111 @@ function createServer(db, options = {}) {
               mode: result.simplefin.mode,
               inserted: result.simplefin.inserted,
               unmapped: result.simplefin.unmapped?.length || 0
+            },
+            rewards: {
+              mode: result.rewards.mode,
+              upserted: result.rewards.upserted,
+              amexStatus: result.rewards.amexStatus,
+              error: result.rewards.error || null
             }
           });
+        }
+
+        if (req.method === "GET" && pathname === "/api/rewards") {
+          const result = rewardsEngine.optimize(
+            dbApi.listTransactions(db),
+            dbApi.listRewardsRules(db),
+            dbApi.listRewardsOffers(db),
+            { asOfDate: dbApi.getSettings(db).asOfDate }
+          );
+          return sendJson(res, 200, {
+            ...result,
+            rules: dbApi.listRewardsRules(db),
+            offers: dbApi.listRewardsOffers(db),
+            webStatus: dbApi.getMeta(db, "rewardsWebStatus", "never"),
+            amexStatus: dbApi.getMeta(db, "rewardsAmexStatus", "seed_only")
+          });
+        }
+
+        if (req.method === "GET" && pathname === "/api/rewards/optimize") {
+          const result = rewardsEngine.optimize(
+            dbApi.listTransactions(db),
+            dbApi.listRewardsRules(db),
+            dbApi.listRewardsOffers(db),
+            { asOfDate: dbApi.getSettings(db).asOfDate }
+          );
+          return sendJson(res, 200, result);
+        }
+
+        if (req.method === "POST" && pathname === "/api/rewards/refresh") {
+          const body = await readBody(req);
+          const forceMock = body.forceMock === true;
+          const result = await rewardsWeb.syncRewards(db, {
+            forceMock,
+            fetchImpl: options.fetchImpl
+          });
+          return sendJson(res, 200, result);
+        }
+
+        if (req.method === "GET" && pathname === "/api/rewards/rules") {
+          return sendJson(res, 200, { rules: dbApi.listRewardsRules(db) });
+        }
+
+        if (req.method === "POST" && pathname === "/api/rewards/rules") {
+          const body = await readBody(req);
+          if (!body.id) {
+            body.id = `rule:manual:${body.accountId || "card"}:${body.category || "*"}:${Date.now()}`;
+          }
+          body.source = "manual";
+          const rule = dbApi.upsertRewardsRule(db, body);
+          return sendJson(res, 200, { ok: true, rule });
+        }
+
+        if (req.method === "PATCH" && pathname.startsWith("/api/rewards/rules/")) {
+          const id = decodeURIComponent(pathname.slice("/api/rewards/rules/".length));
+          const body = await readBody(req);
+          const existing = dbApi.getRewardsRule(db, id);
+          if (!existing) return sendJson(res, 404, { error: "Unknown rule" });
+          const rule = dbApi.upsertRewardsRule(db, {
+            ...existing,
+            ...body,
+            id,
+            source: "manual"
+          });
+          return sendJson(res, 200, { ok: true, rule });
+        }
+
+        if (req.method === "DELETE" && pathname.startsWith("/api/rewards/rules/")) {
+          const id = decodeURIComponent(pathname.slice("/api/rewards/rules/".length));
+          return sendJson(res, 200, dbApi.deleteRewardsRule(db, id));
+        }
+
+        if (req.method === "GET" && pathname === "/api/rewards/offers") {
+          return sendJson(res, 200, { offers: dbApi.listRewardsOffers(db) });
+        }
+
+        if (req.method === "POST" && pathname === "/api/rewards/offers") {
+          const body = await readBody(req);
+          if (!body.id) {
+            body.id = `offer:manual:${body.accountId || "card"}:${Date.now()}`;
+          }
+          body.source = "manual";
+          const offer = dbApi.upsertRewardsOffer(db, body);
+          return sendJson(res, 200, { ok: true, offer });
+        }
+
+        if (req.method === "PATCH" && pathname.startsWith("/api/rewards/offers/")) {
+          const id = decodeURIComponent(pathname.slice("/api/rewards/offers/".length));
+          const body = await readBody(req);
+          const existing = dbApi.getRewardsOffer(db, id);
+          if (!existing) return sendJson(res, 404, { error: "Unknown offer" });
+          const offer = dbApi.upsertRewardsOffer(db, {
+            ...existing,
+            ...body,
+            id,
+            source: "manual"
+          });
+          return sendJson(res, 200, { ok: true, offer });
         }
 
         if (req.method === "GET" && pathname === "/api/ai/mode") {
@@ -435,7 +627,7 @@ async function main() {
   const server = createServer(db);
   server.listen(PORT, HOST, () => {
     console.log(`Finance hub listening on http://${HOST}:${PORT}`);
-    console.log(`Hub home:  http://${HOST}:${PORT}/apps/hub/home.html`);
+    console.log(`Shelf app: http://${HOST}:${PORT}/apps/shelf/shelf.html`);
     console.log(`Money UI:  http://${HOST}:${PORT}/apps/money/money.html`);
     console.log(`Digest UI: http://${HOST}:${PORT}/apps/digest/digest.html`);
     console.log(`Pair phone: http://${HOST}:${PORT}/apps/hub/pairing.html`);
