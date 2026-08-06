@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shelf hub</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121922;
+      --line: #283544;
+      --text: #edf3f8;
+      --muted: #91a0ad;
+      --accent: #5ee0a0;
+      --blue: #74b9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, #152033, var(--bg) 55%);
+      color: var(--text);
+      font: 15px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    .app {
+      width: min(520px, 100%);
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    h1 {
+      margin: 6px 0 8px;
+      font-size: 34px;
+      letter-spacing: -.03em;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0 0 28px;
+      max-width: 36em;
+    }
+    .stack { display: grid; gap: 12px; }
+    a.tile {
+      display: block;
+      padding: 18px 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      color: inherit;
+      text-decoration: none;
+    }
+    a.tile:active { border-color: var(--accent); }
+    a.tile strong {
+      display: block;
+      font-size: 20px;
+      letter-spacing: -.02em;
+      margin-bottom: 4px;
+    }
+    a.tile span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    a.tile .cta {
+      display: inline-block;
+      margin-top: 12px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .meta {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .meta a { color: var(--blue); }
+    .bridge {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="eyebrow">Shelf · hub</div>
+    <h1>Home</h1>
+    <p class="sub">
+      Load this page in Shelf. Money and Daily Digest are separate HTML apps —
+      Shelf only hosts them; the hub holds data and secrets.
+    </p>
+
+    <div class="stack">
+      <a class="tile" href="../money/money.html">
+        <strong>Money</strong>
+        <span>Net worth, safe-to-spend, transaction review, imports</span>
+        <div class="cta">Open Money →</div>
+      </a>
+      <a class="tile" href="../digest/digest.html">
+        <strong>Daily Digest</strong>
+        <span>Today, Watching, reading, junk — tasks and events from mail/SMS/GroupMe</span>
+        <div class="cta">Open Digest →</div>
+      </a>
+    </div>
+
+    <p class="bridge" id="bridge">Detecting Shelf…</p>
+    <p class="meta">
+      Laptop-only:
+      <a href="pairing.html">Pair phone</a>
+      ·
+      <a href="simplefin.html">SimpleFIN</a>
+    </p>
+  </main>
+
+  <script src="../shelf/hub-shelf.js"></script>
+  <script src="../shelf/mock-shelf.js"></script>
+  <script>
+    "use strict";
+    const el = document.querySelector("#bridge");
+    if (!window.Shelf) {
+      el.textContent = "window.Shelf is missing — open this URL through Shelf or the hub.";
+    } else if (Shelf.__hub) {
+      el.textContent = "Shelf (hub relay) · data stays on the laptop hub";
+    } else if (Shelf.__real) {
+      el.textContent = "Shelf (device) · sync with hub via encrypted folder";
+    } else {
+      el.textContent = "Shelf (mock) · local stub for desktop preview";
+    }
+  </script>
+</body>
+</html>

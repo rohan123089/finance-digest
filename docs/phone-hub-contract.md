@@ -1,6 +1,7 @@
 # Phone ↔ hub sync contract
 
-> Contract for Milestone 3. It is documentation only in Milestone 1.
+> Active for **M2**. The phone pushes encrypted outbox files; the hub never
+> reaches into the phone. Hub publishes encrypted digest/snapshot down-files.
 
 ## Principles
 
@@ -45,6 +46,9 @@ Before encryption:
   "data": { "name": "A. Rivera", "month": 8, "day": 6 } }
 { "id": "gm:998877", "type": "signal.event", "source": "groupme",
   "data": { "title": "Dinner", "start": "2026-08-08T19:00:00", "sourceRef": "groupme:group/44/msg/998877" } }
+{ "id": "life:task:mail-2002", "type": "signal.task", "source": "email",
+  "data": { "title": "CS 240 assignment 4", "dueAt": "2026-08-12T12:00:00.000Z",
+            "domain": "school", "sourceRef": "email:mail-2002", "why": "deadline language" } }
 { "id": "sms:12345", "type": "signal.link", "source": "sms",
   "data": { "url": "https://example.com/piece", "sharedBy": "Sam", "context": null } }
 { "id": "rcpt:5b2c", "type": "signal.receipt", "source": "camera",
@@ -53,15 +57,22 @@ Before encryption:
   "data": { "targetRef": { "listIds": ["news.acme.com"] } } }
 ```
 
+Life capture (M7): hub email, SMS, and GroupMe (rules in `engine/life.js`) may emit
+`signal.task` / `signal.event` with `domain` ∈ `personal` | `school` | `professional`,
+plus `dueAt` / `start`. Digest **Today** includes Going / Not going / calendar actions.
+**Not going** moves the event to digest `watching[]` so it stays visible without nagging.
+Phone may also push raw `signal.sms` `{ text, from }`; the hub expands it on ingest.
+
 ## DOWN — digest
 
 `digest-latest.json` has these sections:
 
-- `today[]`: birthdays, events, and tasks. Each has `actions[]` carrying a
-  `targetRef` that the phone echoes back.
+- `today[]`: birthdays, events, and tasks (money + life). Each has `actions[]` carrying a
+  `targetRef` that the phone echoes back. Life tasks/events may include `domain`.
+  Events offer `rsvp.yes` / `rsvp.no` / `calendar.add`.
+- `watching[]`: events you marked **not going** — still listed so you know they happen.
 - `reading[]`: title, URL, source, and rank.
 - `junk[]`: unsubscribe or mute entries with a `targetRef`.
-
 ## DOWN — snapshot
 
 `snapshot-latest.json` is already aggregated and redacted. It contains no account

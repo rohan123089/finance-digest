@@ -2,109 +2,83 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
-const { DatabaseSync } = require("node:sqlite");
+const Database = require("better-sqlite3");
 const Rules = require("../engine/rules.js");
 const Model = require("../engine/model.js");
 
 const ROOT = path.join(__dirname, "..");
-const DEFAULT_DB_PATH = path.join(ROOT, "data", "finance.db.enc");
+const DEFAULT_DB_PATH = path.join(ROOT, "data", "finance.db");
 const SAMPLE_PATH = path.join(ROOT, "sample-data", "transactions.json");
 
+const STARTER_ACCOUNTS = [
+  { id: "uwcu-checking", label: "UWCU Checking", type: "cash", openingBalance: 0 },
+  { id: "uwcu-savings", label: "UWCU Savings", type: "cash", openingBalance: 0 },
+  { id: "amex", label: "Amex", type: "liability", openingBalance: 0 },
+  { id: "discover", label: "Discover", type: "liability", openingBalance: 0 },
+  { id: "vanguard", label: "Vanguard", type: "investment", openingBalance: 0 },
+  {
+    id: "outside-payments",
+    label: "Outside payments",
+    type: "external",
+    openingBalance: 0
+  }
+];
+
+const SAMPLE_ACCOUNTS = [
+  { id: "checking", label: "Checking", type: "cash", openingBalance: 6200 },
+  { id: "savings", label: "Savings", type: "cash", openingBalance: 12000 },
+  { id: "vanguard", label: "Vanguard", type: "investment", openingBalance: 28000 },
+  {
+    id: "outside-payments",
+    label: "Outside payments",
+    type: "external",
+    openingBalance: 0
+  }
+];
+
 /**
- * Encrypted-at-rest SQLite using Node's built-in node:sqlite plus AES-256-GCM
- * envelope encryption of the DB file. Chosen because native SQLCipher builds
- * (better-sqlite3 + SQLCipher) require Visual Studio tooling on Windows.
+ * Opens a SQLCipher-compatible better-sqlite3 database. Key retrieval is kept
+ * outside this module so the database layer never falls back to an environment
+ * variable or a hardcoded passphrase.
  */
 
-function deriveKey(passphrase, salt) {
-  return crypto.pbkdf2Sync(String(passphrase), salt, 210000, 32, "sha512");
-}
-
-function encryptDbFile(plainPath, encPath, passphrase) {
-  const plain = fs.readFileSync(plainPath);
-  const salt = crypto.randomBytes(16);
-  const iv = crypto.randomBytes(12);
-  const key = deriveKey(passphrase, salt);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const payload = Buffer.concat([
-    Buffer.from("FDDB1"),
-    salt,
-    iv,
-    tag,
-    encrypted
-  ]);
-  fs.writeFileSync(encPath, payload);
-}
-
-function decryptDbFile(encPath, plainPath, passphrase) {
-  const payload = fs.readFileSync(encPath);
-  const magic = payload.subarray(0, 5).toString("utf8");
-  if (magic !== "FDDB1") {
-    throw new Error("Unrecognized encrypted database format");
-  }
-  const salt = payload.subarray(5, 21);
-  const iv = payload.subarray(21, 33);
-  const tag = payload.subarray(33, 49);
-  const encrypted = payload.subarray(49);
-  const key = deriveKey(passphrase, salt);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  try {
-    const plain = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    fs.writeFileSync(plainPath, plain);
-  } catch (error) {
-    throw new Error(
-      `Unable to decrypt database (wrong passphrase?): ${error.message}`
-    );
-  }
-}
-
 function openDatabase(options = {}) {
-  const encPath = options.dbPath || process.env.HUB_DB_PATH || DEFAULT_DB_PATH;
-  const passphrase =
-    options.passphrase ||
-    process.env.HUB_DB_PASSPHRASE ||
-    "dev-passphrase-change-me";
-  const plainPath = `${encPath}.work.sqlite`;
-
-  fs.mkdirSync(path.dirname(encPath), { recursive: true });
-
-  if (fs.existsSync(encPath)) {
-    decryptDbFile(encPath, plainPath, passphrase);
-  } else if (fs.existsSync(plainPath)) {
-    fs.rmSync(plainPath);
+  const dbPath = options.dbPath || process.env.HUB_DB_PATH || DEFAULT_DB_PATH;
+  const suppliedKey = options.encryptionKey || options.passphrase;
+  if (!suppliedKey) {
+    throw new Error("An OS-keychain database key is required");
   }
 
-  const db = new DatabaseSync(plainPath);
-  db._encPath = encPath;
-  db._plainPath = plainPath;
-  db._passphrase = passphrase;
-  db._persist = function persist() {
-    encryptDbFile(plainPath, encPath, passphrase);
-  };
-  const originalClose = db.close.bind(db);
-  db.close = function closeEncrypted() {
-    try {
-      db._persist();
-    } finally {
-      originalClose();
-      try {
-        fs.rmSync(plainPath, { force: true });
-      } catch (_error) {
-        // ignore cleanup races
-      }
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  try {
+    db.pragma("cipher='sqlcipher'");
+    db.pragma("legacy=4");
+    db.key(
+      Buffer.isBuffer(suppliedKey)
+        ? suppliedKey
+        : Buffer.from(String(suppliedKey), "utf8")
+    );
+    db.pragma("foreign_keys=ON");
+    db._dbPath = dbPath;
+    // better-sqlite3 writes directly to the encrypted database. Retained as a
+    // compatibility hook for the existing data functions.
+    db._persist = function persist() {};
+
+    migrate(db);
+    seedStarterAccounts(db);
+
+    const seedSample =
+      options.seedSample === true || process.env.HUB_SEED_SAMPLE === "1";
+    if (countTransactions(db) === 0 && seedSample) {
+      ensureSampleAccounts(db);
+      seed(db, options.samplePath || SAMPLE_PATH);
     }
-  };
-
-  migrate(db);
-  if (countTransactions(db) === 0) {
-    seed(db, options.samplePath || SAMPLE_PATH);
-    db._persist();
+    return db;
+  } catch (error) {
+    db.close();
+    throw new Error(`Unable to open encrypted database: ${error.message}`);
   }
-  return db;
 }
 
 function withTransaction(db, fn) {
@@ -128,6 +102,16 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL,
+      opening_balance REAL NOT NULL DEFAULT 0,
+      simplefin_account_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS transactions (
@@ -189,8 +173,8 @@ function migrate(db) {
     );
   `);
 
-  setMeta(db, "schemaVersion", "1");
-  setMeta(db, "encryption", "aes-256-gcm-envelope");
+  setMeta(db, "schemaVersion", "2");
+  setMeta(db, "encryption", "sqlcipher");
 }
 
 function setMeta(db, key, value) {
@@ -209,9 +193,145 @@ function countTransactions(db) {
   return db.prepare("SELECT COUNT(*) AS c FROM transactions").get().c;
 }
 
+function countAccounts(db) {
+  return db.prepare("SELECT COUNT(*) AS c FROM accounts").get().c;
+}
+
+function rowToAccount(row) {
+  return {
+    id: row.id,
+    label: row.label,
+    type: row.type,
+    openingBalance: row.opening_balance,
+    simplefinAccountId: row.simplefin_account_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listAccounts(db) {
+  return db
+    .prepare("SELECT * FROM accounts ORDER BY label COLLATE NOCASE, id")
+    .all()
+    .map(rowToAccount);
+}
+
+function getAccount(db, id) {
+  const row = db.prepare("SELECT * FROM accounts WHERE id = ?").get(id);
+  return row ? rowToAccount(row) : null;
+}
+
+function getAccountMaps(db) {
+  const accounts = listAccounts(db);
+  const accountTypes = {};
+  const openingBalances = {};
+  const labels = {};
+  accounts.forEach((account) => {
+    accountTypes[account.id] = account.type;
+    openingBalances[account.id] = account.openingBalance;
+    labels[account.id] = account.label;
+  });
+  return { accountTypes, openingBalances, labels, accounts };
+}
+
+function upsertAccountRow(db, account) {
+  const now = new Date().toISOString();
+  const type = String(account.type || "").toLowerCase();
+  if (!Rules.VALID_ACCOUNT_TYPES.has(type)) {
+    throw new Error(`Invalid account type: ${account.type}`);
+  }
+  const id = String(account.id || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!id) throw new Error("Account id is required");
+  const label = String(account.label || id).trim();
+  const openingBalance = Number(account.openingBalance);
+  const simplefinAccountId =
+    account.simplefinAccountId == null || account.simplefinAccountId === ""
+      ? null
+      : String(account.simplefinAccountId);
+
+  db.prepare(`
+    INSERT INTO accounts (
+      id, label, type, opening_balance, simplefin_account_id, created_at, updated_at
+    ) VALUES (
+      @id, @label, @type, @openingBalance, @simplefinAccountId, @createdAt, @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      label = excluded.label,
+      type = excluded.type,
+      opening_balance = excluded.opening_balance,
+      simplefin_account_id = excluded.simplefin_account_id,
+      updated_at = excluded.updated_at
+  `).run({
+    id,
+    label,
+    type,
+    openingBalance: Number.isFinite(openingBalance) ? openingBalance : 0,
+    simplefinAccountId,
+    createdAt: now,
+    updatedAt: now
+  });
+  return getAccount(db, id);
+}
+
+function createAccount(db, account) {
+  if (getAccount(db, account.id)) {
+    throw new Error(`Account already exists: ${account.id}`);
+  }
+  const created = upsertAccountRow(db, account);
+  if (typeof db._persist === "function") db._persist();
+  return created;
+}
+
+function updateAccount(db, id, patch) {
+  const existing = getAccount(db, id);
+  if (!existing) throw new Error(`Unknown account: ${id}`);
+  const next = {
+    id,
+    label: patch.label != null ? patch.label : existing.label,
+    type: patch.type != null ? patch.type : existing.type,
+    openingBalance:
+      patch.openingBalance != null ? patch.openingBalance : existing.openingBalance,
+    simplefinAccountId:
+      patch.simplefinAccountId !== undefined
+        ? patch.simplefinAccountId
+        : existing.simplefinAccountId
+  };
+  const updated = upsertAccountRow(db, next);
+  if (typeof db._persist === "function") db._persist();
+  return updated;
+}
+
+function findAccountBySimplefinId(db, simplefinAccountId) {
+  const row = db
+    .prepare("SELECT * FROM accounts WHERE simplefin_account_id = ?")
+    .get(String(simplefinAccountId));
+  return row ? rowToAccount(row) : null;
+}
+
+function seedStarterAccounts(db) {
+  if (countAccounts(db) > 0) return;
+  withTransaction(db, () => {
+    STARTER_ACCOUNTS.forEach((account) => upsertAccountRow(db, account));
+  });
+  setMeta(db, "accountsSeeded", "starter");
+}
+
+function ensureSampleAccounts(db) {
+  withTransaction(db, () => {
+    SAMPLE_ACCOUNTS.forEach((account) => {
+      if (!getAccount(db, account.id)) upsertAccountRow(db, account);
+    });
+  });
+}
+
 function seed(db, samplePath) {
   const raw = JSON.parse(fs.readFileSync(samplePath, "utf8"));
-  const normalized = Rules.normalizeTransactions(raw);
+  const { accountTypes } = getAccountMaps(db);
+  const normalized = Rules.normalizeTransactions(raw, accountTypes);
   const insert = db.prepare(`
     INSERT INTO transactions (
       id, date, raw_merchant, amount, account, account_type, direction, category,
@@ -275,6 +395,7 @@ function listTransactions(db) {
 }
 
 function getSettings(db) {
+  const maps = getAccountMaps(db);
   return {
     asOfDate: getMeta(db, "asOfDate", Model.DEFAULT_CONFIG.asOfDate),
     monthlyIncome: Number(
@@ -289,7 +410,10 @@ function getSettings(db) {
         "weeklySavingsTarget",
         Model.DEFAULT_CONFIG.weeklySavingsTarget
       )
-    )
+    ),
+    accountTypes: maps.accountTypes,
+    openingBalances: maps.openingBalances,
+    accountLabels: maps.labels
   };
 }
 
@@ -470,9 +594,10 @@ function getConnectorWatermark(db, source) {
 }
 
 function insertRawTransaction(db, raw) {
-  const normalized = Rules.normalizeTransaction(raw);
+  const { accountTypes } = getAccountMaps(db);
+  const normalized = Rules.normalizeTransaction(raw, accountTypes);
   const now = new Date().toISOString();
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO transactions (
       id, date, raw_merchant, amount, account, account_type, direction, category,
       merchant, needs_review, transfer_account, suggested_transfer_account,
@@ -499,7 +624,7 @@ function insertRawTransaction(db, raw) {
     updatedAt: now
   });
   if (typeof db._persist === "function") db._persist();
-  return normalized;
+  return { ...normalized, inserted: result.changes > 0 };
 }
 
 function saveAiProposal(db, proposal) {
@@ -539,9 +664,16 @@ function redactSnapshot(snapshot) {
     recurringMonthly: snapshot.recurringMonthly,
     runwayMonths: Math.round(snapshot.runwayMonths * 10) / 10,
     owed: snapshot.owed,
+    expenses: snapshot.expenses,
+    spendingByCategory: snapshot.spendingByCategory,
+    recurring: snapshot.recurring,
+    balances: snapshot.balances,
     safeToSpend: {
       period: snapshot.safeToSpend.period,
       amount: snapshot.safeToSpend.remaining,
+      weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+      committed: snapshot.safeToSpend.committed,
+      savingsTarget: snapshot.safeToSpend.savingsTarget,
       spent: snapshot.safeToSpend.spent,
       remaining: snapshot.safeToSpend.remaining
     },
@@ -551,7 +683,14 @@ function redactSnapshot(snapshot) {
 
 module.exports = {
   DEFAULT_DB_PATH,
+  STARTER_ACCOUNTS,
   openDatabase,
+  listAccounts,
+  getAccount,
+  getAccountMaps,
+  createAccount,
+  updateAccount,
+  findAccountBySimplefinId,
   listTransactions,
   getSettings,
   saveSettings,

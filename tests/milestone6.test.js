@@ -11,8 +11,7 @@ async function main() {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fd-m6-"));
   const dbPath = path.join(tmpRoot, "test.db");
   const samplePath = path.join(__dirname, "../sample-data/transactions.json");
-  const db = dbApi.openDatabase({
-    dbPath,
+  const db = dbApi.openDatabase({ seedSample: true, dbPath,
     passphrase: "ai-test",
     samplePath
   });

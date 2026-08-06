@@ -11,9 +11,8 @@ async function main() {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fd-m4-"));
   const dbPath = path.join(tmpRoot, "test.db");
   const samplePath = path.join(__dirname, "../sample-data/transactions.json");
-  const db = dbApi.openDatabase({
-    dbPath,
-    passphrase: "connector-test",
+  const db = dbApi.openDatabase({ seedSample: true, dbPath,
+    encryptionKey: Buffer.alloc(32, 4),
     samplePath
   });
 

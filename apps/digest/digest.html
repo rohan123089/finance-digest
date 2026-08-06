@@ -39,7 +39,7 @@
       font-weight: 700;
     }
     h1 { margin: 4px 0 0; font-size: 34px; letter-spacing: -.03em; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     button {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -54,10 +54,24 @@
       border-color: transparent;
       font-weight: 700;
     }
+    button.tiny {
+      padding: 4px 8px;
+      font-size: 12px;
+      margin-top: 8px;
+      margin-right: 6px;
+    }
+    .bridge {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
     .grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
+    }
+    @media (min-width: 960px) {
+      .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     }
     section {
       border: 1px solid var(--line);
@@ -65,6 +79,7 @@
       background: color-mix(in srgb, var(--panel) 92%, transparent);
       min-height: 280px;
     }
+    section.watching .item { opacity: 0.72; }
     section h2 {
       margin: 0;
       padding: 12px 14px;
@@ -84,21 +99,24 @@
     @media (max-width: 860px) {
       .grid { grid-template-columns: 1fr; }
       header { flex-direction: column; align-items: start; }
+      .bridge { text-align: left; }
     }
   </style>
 </head>
 <body>
-  <main class="app">
+  <main class="app" id="app" hidden>
     <header>
       <div>
         <div class="eyebrow">Daily card</div>
         <h1>Digest</h1>
       </div>
       <div class="actions">
+        <div class="bridge">
+          <div id="bridge-label">Shelf</div>
+          <div id="bridge-detail">Rules-assembled · offline-first</div>
+        </div>
         <button type="button" id="refresh">Refresh</button>
-        <button type="button" id="connectors">Run connectors</button>
-        <button type="button" id="sync">Ingest sync</button>
-        <button class="primary" type="button" id="ai">AI propose</button>
+        <button type="button" class="primary" id="ai-propose">Propose nudges</button>
       </div>
     </header>
 
@@ -106,6 +124,10 @@
       <section>
         <h2>Today</h2>
         <div class="list" id="today"></div>
+      </section>
+      <section class="watching">
+        <h2>Watching</h2>
+        <div class="list" id="watching"></div>
       </section>
       <section>
         <h2>Reading</h2>
@@ -118,7 +140,10 @@
     </div>
     <p class="status" id="status">Loading…</p>
   </main>
+  <p class="status" id="boot-error" hidden style="margin:40px auto;width:min(520px,90%)"></p>
 
+  <script src="../shelf/hub-shelf.js"></script>
+  <script src="../shelf/mock-shelf.js"></script>
   <script>
     "use strict";
 
@@ -126,6 +151,13 @@
       const el = document.createElement("span");
       el.textContent = value == null ? "" : String(value);
       return el.innerHTML;
+    }
+
+    function actionId(prefix) {
+      const suffix = globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return `${prefix}:${suffix}`;
     }
 
     function renderItems(selector, items, mapper, emptyText) {
@@ -137,17 +169,71 @@
       root.innerHTML = items.map(mapper).join("");
     }
 
-    async function loadDigest() {
-      const response = await fetch("/api/digest");
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Failed to load digest");
-      const digest = payload.digest;
+    function actionButtons(actions) {
+      if (!actions || !actions.length) return "";
+      const labels = {
+        "import.statement": "Open Money to import",
+        "task.complete": "Done",
+        "calendar.add": "Add to calendar",
+        "rsvp.yes": "Going",
+        "rsvp.no": "Not going",
+        dismiss: "Dismiss",
+        ack: "Ack",
+        rsvp: "RSVP",
+        unsubscribe: "Unsubscribe"
+      };
+      return actions
+        .map((action) => {
+          const label = labels[action.type] || action.type;
+          const href = action.targetRef?.href;
+          if (action.type === "import.statement" && href) {
+            return (
+              `<a class="tiny digest-action" style="display:inline-block;text-decoration:none" ` +
+              `href="${escapeHtml(href)}">${escapeHtml(label)}</a>`
+            );
+          }
+          return (
+            `<button type="button" class="tiny digest-action" ` +
+            `data-type="${escapeHtml(action.type)}" ` +
+            `data-ref="${escapeHtml(JSON.stringify(action.targetRef || {}))}">` +
+            `${escapeHtml(label)}</button>`
+          );
+        })
+        .join("");
+    }
 
-      renderItems("#today", digest.today || [], (item) => `
+    async function loadDigest() {
+      const digest = await Shelf.data.get("digest");
+      if (!digest) {
+        document.querySelector("#status").textContent = "No digest synced yet";
+        renderItems("#today", [], null, "Nothing for today yet");
+        renderItems("#watching", [], null, "Nothing you’re skipping");
+        renderItems("#reading", [], null, "No reading links");
+        renderItems("#junk", [], null, "No junk actions");
+        return;
+      }
+
+      renderItems("#today", digest.today || [], (item) => {
+        const when = item.dueAt || item.start ||
+          (item.month && item.day ? `${item.month}/${item.day}` : "");
+        const domain = item.domain ? ` · ${item.domain}` : "";
+        const source = item.source ? ` · ${item.source}` : "";
+        return `
         <div class="item">
-          <strong>${escapeHtml(item.kind)} · ${escapeHtml(item.title || item.name)}</strong>
-          <div class="meta">${escapeHtml(item.start || `${item.month}/${item.day}` || "")}</div>
-        </div>`, "Nothing for today yet");
+          <strong>${escapeHtml(item.kind)}${escapeHtml(domain)} · ${escapeHtml(item.title || item.name)}</strong>
+          <div class="meta">${escapeHtml(when)}${escapeHtml(source)}${item.why ? ` · ${escapeHtml(item.why)}` : ""}</div>
+          ${actionButtons(item.actions)}
+        </div>`;
+      }, "Nothing for today yet");
+
+      renderItems("#watching", digest.watching || [], (item) => {
+        const when = item.start || "";
+        return `
+        <div class="item">
+          <strong>not going · ${escapeHtml(item.title || item.name)}</strong>
+          <div class="meta">${escapeHtml(when)}${item.source ? ` · ${escapeHtml(item.source)}` : ""} · still on your radar</div>
+        </div>`;
+      }, "Nothing you’re skipping");
 
       renderItems("#reading", digest.reading || [], (item) => `
         <div class="item">
@@ -158,22 +244,20 @@
       renderItems("#junk", digest.junk || [], (item) => `
         <div class="item">
           <strong>${escapeHtml(item.action)}</strong>
-          <div class="meta">${escapeHtml(item.status || "pending")} · ${escapeHtml(JSON.stringify(item.targetRef))}</div>
+          <div class="meta">${escapeHtml(item.status || "pending")}</div>
+          ${
+            item.status === "pending"
+              ? `<button type="button" class="tiny digest-action" data-type="unsubscribe" data-ref="${escapeHtml(JSON.stringify(item.targetRef || { itemId: item.id }))}">run</button>`
+              : ""
+          }
         </div>`, "No junk actions");
 
       document.querySelector("#status").textContent =
-        `Updated ${digest.generatedAt || "now"} · ${payload.items.length} sync item(s)`;
-    }
-
-    async function post(path, body = {}) {
-      const response = await fetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Request failed");
-      return payload;
+        `Updated ${digest.generatedAt || "now"} · as of ${digest.asOfDate || "—"} · ` +
+        `${(digest.today || []).length} today · ` +
+        `${(digest.watching || []).length} watching · ` +
+        `${(digest.reading || []).length} reading · ` +
+        `${(digest.junk || []).length} junk`;
     }
 
     document.querySelector("#refresh").addEventListener("click", () => {
@@ -182,45 +266,75 @@
       });
     });
 
-    document.querySelector("#connectors").addEventListener("click", async () => {
+    document.querySelector("#ai-propose").addEventListener("click", async () => {
+      const status = document.querySelector("#status");
+      if (!Shelf.ai || typeof Shelf.ai.propose !== "function") {
+        status.textContent = "AI is not available on this bridge";
+        return;
+      }
       try {
-        const result = await post("/api/connectors/run", { forceMock: true });
-        document.querySelector("#status").textContent =
-          `Connectors: groupme ${result.groupme.emitted.length}, email ${result.email.emitted.length}, bank ${result.bank.emitted.length}`;
+        await Shelf.ai.setMode("LOCAL");
+        const result = await Shelf.ai.propose();
+        if (result.mode === "OFF") {
+          status.textContent = "AI is OFF";
+        } else {
+          status.textContent =
+            `AI ${result.mode}: ${(result.proposal?.flags || []).length} nudge(s); records not mutated`;
+        }
         await loadDigest();
       } catch (error) {
-        document.querySelector("#status").textContent = error.message;
+        status.textContent = error.message || String(error);
       }
     });
 
-    document.querySelector("#sync").addEventListener("click", async () => {
+    document.querySelector(".grid").addEventListener("click", async (event) => {
+      const button = event.target.closest(".digest-action");
+      if (!button) return;
+      const type = button.dataset.type;
+      let targetRef = {};
       try {
-        const result = await post("/api/sync/ingest");
-        document.querySelector("#status").textContent =
-          `Ingested ${result.processed.length} outbox file(s)`;
+        targetRef = JSON.parse(button.dataset.ref || "{}");
+      } catch (_error) {
+        targetRef = {};
+      }
+      button.disabled = true;
+      try {
+        await Shelf.outbox.push({
+          id: actionId(`digest:${type}`),
+          type: type.startsWith("action.") ? type : `action.${type}`,
+          source: "digest",
+          collectedAt: new Date().toISOString(),
+          data: { targetRef }
+        });
         await loadDigest();
       } catch (error) {
-        document.querySelector("#status").textContent = error.message;
+        document.querySelector("#status").textContent = error.message || String(error);
+        button.disabled = false;
       }
     });
 
-    document.querySelector("#ai").addEventListener("click", async () => {
-      try {
-        await post("/api/ai/mode", { mode: "LOCAL" });
-        const result = await post("/api/ai/propose");
-        const count = result.proposal?.flags?.length || 0;
-        document.querySelector("#status").textContent =
-          result.mode === "OFF"
-            ? "AI is OFF"
-            : `AI ${result.mode}: ${count} proposed flag(s); records not mutated`;
-      } catch (error) {
-        document.querySelector("#status").textContent = error.message;
+    async function boot() {
+      if (!window.Shelf || typeof Shelf.data?.get !== "function") {
+        throw new Error("window.Shelf is missing");
       }
-    });
+      document.querySelector("#bridge-label").textContent = Shelf.__hub
+        ? "Shelf (hub relay)"
+        : Shelf.__real
+          ? "Shelf (device)"
+          : "Shelf (mock)";
+      document.querySelector("#bridge-detail").textContent = Shelf.__hub
+        ? "Assembled on hub · outbox actions"
+        : Shelf.__real
+          ? "Native bridge · no page network"
+          : "Local stub · no page network";
+      document.querySelector("#app").hidden = false;
+      await loadDigest();
+    }
 
-    loadDigest().catch((error) => {
-      document.querySelector("#status").textContent =
-        `${error.message}. Start the hub and open this page from localhost.`;
+    boot().catch((error) => {
+      const box = document.querySelector("#boot-error");
+      box.hidden = false;
+      box.textContent = `Digest failed to start: ${error.message || error}`;
     });
   </script>
 </body>

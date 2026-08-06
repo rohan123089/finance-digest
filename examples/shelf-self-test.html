@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shelf self-test</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.5 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(760px, 92%); margin: 32px auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      padding: 10px 12px;
+      border: 1px solid #283544;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: #121922;
+    }
+    .tag { font-weight: 700; min-width: 62px; }
+    .pass { color: #5ee0a0; }
+    .fail { color: #ff6b6b; }
+    .name { font-weight: 600; }
+    .detail { color: #91a0ad; }
+    .summary { margin: 16px 0 20px; font-size: 16px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Shelf self-test</h1>
+    <p class="sub">
+      Desktop has no Android Shelf. Here this page checks the
+      <strong>hub relay</strong> (localhost) or the
+      <strong>offline mock</strong>. On a phone, load it via My files in a
+      signed Shelf build to exercise the real bridge.
+    </p>
+    <p class="sub" id="bridge">Detecting bridge…</p>
+    <div class="summary" id="summary">Running…</div>
+    <div id="results"></div>
+  </main>
+
+  <!-- Shelf selects the native bridge, localhost relay, or offline mock. -->
+  <script src="../apps/shelf/hub-shelf.js"></script>
+  <script src="../apps/shelf/mock-shelf.js"></script>
+  <script src="../engine/rules.js"></script>
+  <script src="../engine/model.js"></script>
+  <script>
+    "use strict";
+
+    const results = document.querySelector("#results");
+    const cases = [];
+
+    function record(name, passed, detail) {
+      cases.push(passed);
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        `<span class="tag ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span>` +
+        `<span><span class="name">${name}</span>` +
+        (detail ? ` <span class="detail">— ${detail}</span>` : "") +
+        `</span>`;
+      results.appendChild(row);
+    }
+
+    async function expectReject(name, promiseFactory) {
+      try {
+        await promiseFactory();
+        record(name, false, "resolved but should have rejected");
+      } catch (error) {
+        record(name, error && error.shelf === true, `rejected with code ${error && error.code}`);
+      }
+    }
+
+    async function run() {
+      document.querySelector("#bridge").textContent = window.Shelf
+        ? `Active adapter: ${
+            Shelf.__hub
+              ? "hub relay (desktop localhost — not Android Shelf)"
+              : Shelf.__real
+                ? "device Shelf (Android WebView)"
+                : "offline mock (file:// / no hub)"
+          }`
+        : "No window.Shelf present";
+
+      record("window.Shelf present", Boolean(window.Shelf));
+      record("Shelf.secure exists", Boolean(window.Shelf && Shelf.secure));
+
+      // secure.* must reject: tokens live in Connect and are used via Net.call.
+      await expectReject("secure.get rejects", () => Shelf.secure.get("token"));
+      await expectReject("secure.set rejects", () => Shelf.secure.set("token", "x"));
+      await expectReject("secure.delete rejects", () => Shelf.secure.delete("token"));
+
+      // data.get('transactions'): a { transactions } field, or null.
+      const tx = await Shelf.data.get("transactions");
+      const txShapeOk =
+        tx === null ||
+        (typeof tx === "object" && "transactions" in tx);
+      record("data.get('transactions') is a field or null", txShapeOk,
+        tx === null ? "null" : "object with transactions");
+      if (tx && "transactions" in tx) {
+        record("transactions is an array when present", Array.isArray(tx.transactions),
+          `${Array.isArray(tx.transactions) ? tx.transactions.length : "n/a"} item(s)`);
+      }
+
+      // snapshot is redacted: no raw rows or account numbers.
+      const snap = await Shelf.data.get("snapshot");
+      if (snap === null) {
+        record("data.get('snapshot') is null without synced data", true, "null");
+      } else {
+        record("snapshot kind is 'snapshot'", snap.kind === "snapshot");
+        const serialized = JSON.stringify(snap);
+        record("snapshot carries no raw transactions", !serialized.includes("rawMerchant"));
+        record("snapshot has safeToSpend.remaining",
+          snap.safeToSpend && typeof snap.safeToSpend.remaining === "number");
+      }
+
+      // digest stub sections.
+      const digest = await Shelf.data.get("digest");
+      record("digest has today/reading/junk arrays",
+        Array.isArray(digest.today) &&
+        Array.isArray(digest.reading) &&
+        Array.isArray(digest.junk));
+
+      // outbox accepts items with a stable id + type.
+      try {
+        const ack = await Shelf.outbox.push({
+          id: `self-test:${Date.now()}`,
+          type: "signal.selftest",
+          source: "self-test",
+          data: {}
+        });
+        record("outbox.push resolves", ack && typeof ack.total === "number",
+          `queued ${ack && ack.queued}, total ${ack && ack.total}`);
+      } catch (error) {
+        record("outbox.push resolves", false, error.message || String(error));
+      }
+
+      const passed = cases.filter(Boolean).length;
+      const summary = document.querySelector("#summary");
+      const allPass = passed === cases.length;
+      summary.textContent = `${passed}/${cases.length} checks passed`;
+      summary.className = `summary ${allPass ? "pass" : "fail"}`;
+    }
+
+    run().catch((error) => {
+      document.querySelector("#summary").textContent =
+        `Self-test crashed: ${error.message || error}`;
+      document.querySelector("#summary").className = "summary fail";
+    });
+  </script>
+</body>
+</html>

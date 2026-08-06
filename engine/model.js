@@ -13,14 +13,22 @@
     openingBalances: {
       checking: 6200,
       savings: 12000,
+      "uwcu-checking": 0,
+      "uwcu-savings": 0,
       vanguard: 28000,
-      "parents-card": 0
+      amex: 0,
+      discover: 0,
+      "outside-payments": 0
     },
     accountTypes: {
       checking: "cash",
       savings: "cash",
+      "uwcu-checking": "cash",
+      "uwcu-savings": "cash",
       vanguard: "investment",
-      "parents-card": "external"
+      amex: "liability",
+      discover: "liability",
+      "outside-payments": "external"
     }
   };
 

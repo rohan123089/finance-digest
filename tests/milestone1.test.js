@@ -78,7 +78,8 @@ const html = fs.readFileSync(
 );
 assert.doesNotMatch(html, /https?:\/\//i, "UI has no network dependencies");
 assert.doesNotMatch(html, /\blocalStorage\b/, "UI does not use localStorage");
-assert.match(html, /SAMPLE_TRANSACTIONS/, "offline sample data remains embedded");
-assert.match(html, /hubMode/, "hub mode path is available when served locally");
+assert.doesNotMatch(html, /\bfetch\s*\(/, "UI must not call fetch");
+assert.match(html, /Shelf\.data\.get/, "UI loads data via Shelf bridge");
+assert.match(html, /mock-shelf\.js/, "mock Shelf shim is included");
 
 console.log("Milestone 1 acceptance checks passed.");

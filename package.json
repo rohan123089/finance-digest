@@ -7,16 +7,28 @@
   "scripts": {
     "start": "node hub/server.js",
     "hub": "node hub/server.js",
-    "test": "node tests/milestone1.test.js && node tests/milestone2.test.js && node tests/milestone3.test.js && node tests/milestone4.test.js && node tests/milestone5.test.js && node tests/milestone6.test.js",
-    "test:m1": "node tests/milestone1.test.js",
-    "test:m2": "node tests/milestone2.test.js",
-    "sync:once": "node hub/sync-cli.js once",
-    "connectors:once": "node hub/connectors/run-once.js"
+    "test": "node tests/money-shelf.test.js && node tests/milestone1.test.js && node tests/hub-m1.test.js && node tests/hub-m2.test.js && node tests/hub-m3.test.js && node tests/hub-m4.test.js && node tests/hub-m5.test.js && node tests/hub-m6.test.js && node tests/hub-m7.test.js && node tests/accounts-simplefin.test.js",
+    "test:m1": "node tests/milestone1.test.js && node tests/hub-m1.test.js",
+    "test:accounts": "node tests/accounts-simplefin.test.js",
+    "test:m2": "node tests/hub-m2.test.js",
+    "test:m3": "node tests/hub-m3.test.js",
+    "test:m4": "node tests/hub-m4.test.js",
+    "test:m5": "node tests/hub-m5.test.js",
+    "test:m6": "node tests/hub-m6.test.js",
+    "test:m7": "node tests/hub-m7.test.js",
+    "test:money": "node tests/money-shelf.test.js",
+    "sync:once": "node hub/sync-cli.js",
+    "import:file": "node hub/import/cli.js",
+    "connectors:once": "node hub/connectors/run-once.js",
+    "connectors:set-secret": "node hub/connectors/set-secret.js"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "libsodium-wrappers": "^0.7.15"
+    "better-sqlite3": "npm:better-sqlite3-multiple-ciphers@^12.11.1",
+    "keytar": "^7.9.0",
+    "libsodium-wrappers": "^0.7.15",
+    "qrcode": "^1.5.4"
   }
 }

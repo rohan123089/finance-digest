@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub sync pairing</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main {
+      width: min(420px, 92vw);
+      text-align: center;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    #qr {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      border-radius: 16px;
+      background: #fff;
+      min-height: 280px;
+    }
+    #qr svg { width: 280px; height: 280px; }
+    .meta {
+      margin-top: 16px;
+      color: #91a0ad;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .warn {
+      margin-top: 14px;
+      color: #ffcf66;
+      font-size: 12px;
+    }
+    .error { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Pair phone</h1>
+    <p class="sub">Scan with Shelf to receive the shared sync key. Laptop-only.</p>
+    <div id="qr">Loading…</div>
+    <div class="meta" id="meta"></div>
+    <p class="warn">Do not screenshot or share this QR. It contains the sync key.</p>
+  </main>
+  <script>
+    "use strict";
+    (async () => {
+      const qr = document.querySelector("#qr");
+      const meta = document.querySelector("#meta");
+      try {
+        const response = await fetch("/api/sync/pairing");
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Pairing failed");
+        qr.innerHTML = payload.svg;
+        meta.textContent =
+          `fingerprint ${payload.fingerprint} · hub ${payload.hub}`;
+      } catch (error) {
+        qr.innerHTML = `<p class="error">${error.message || error}</p>`;
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -5,10 +5,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
 const dbApi = require("./db.js");
+const secretStore = require("./secret-store.js");
 const sync = require("./sync.js");
-const connectors = require("./connectors/index.js");
-const ai = require("./ai.js");
 const cryptoUtil = require("./crypto.js");
+const connectors = require("./connectors/index.js");
+const simplefin = require("./connectors/simplefin.js");
+const ai = require("./ai.js");
+const pairing = require("./pairing.js");
+const importer = require("./import/index.js");
 
 const ROOT = path.join(__dirname, "..");
 const PORT = Number(process.env.HUB_PORT || 8787);
@@ -35,10 +39,20 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-function readBody(req) {
+function readBody(req, options = {}) {
+  const maxBytes = options.maxBytes || 1024 * 1024;
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error(`JSON body exceeds ${maxBytes} bytes`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf8");
       if (!raw) return resolve({});
@@ -54,15 +68,39 @@ function readBody(req) {
 
 function safeJoin(root, requestPath) {
   const cleaned = path.normalize(requestPath).replace(/^([/\\])+/, "");
-  const full = path.join(root, cleaned);
-  if (!full.startsWith(root)) return null;
+  const full = path.resolve(root, cleaned);
+  const relative = path.relative(root, full);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return full;
 }
 
 function serveStatic(req, res, urlPath) {
-  let relative = urlPath === "/" ? "/apps/money/money.html" : urlPath;
+  // Never rewrite "/" in-place: relative script URLs in money.html would resolve
+  // from "/" and 404 (/shelf/... instead of /apps/shelf/...). Redirect instead.
+  if (urlPath === "/") {
+    res.writeHead(302, {
+      Location: "/apps/hub/home.html",
+      "Cache-Control": "no-store"
+    });
+    res.end();
+    return;
+  }
+  const relative = urlPath;
   const filePath = safeJoin(ROOT, relative);
-  if (!filePath || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  const allowedRoots = [
+    path.join(ROOT, "apps"),
+    path.join(ROOT, "engine"),
+    path.join(ROOT, "examples")
+  ];
+  const isBrowserAsset = filePath && allowedRoots.some((allowedRoot) => {
+    const within = path.relative(allowedRoot, filePath);
+    return within === "" || (!within.startsWith("..") && !path.isAbsolute(within));
+  });
+  if (
+    !isBrowserAsset ||
+    !fs.existsSync(filePath) ||
+    fs.statSync(filePath).isDirectory()
+  ) {
     sendJson(res, 404, { error: "Not found" });
     return;
   }
@@ -74,9 +112,12 @@ function serveStatic(req, res, urlPath) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-function createServer(db) {
-  sync.ensureSyncLayout(SYNC_ROOT);
-  cryptoUtil.loadOrCreateKey(ROOT);
+function createServer(db, options = {}) {
+  const projectRoot = options.projectRoot || ROOT;
+  const syncRoot = options.syncRoot || SYNC_ROOT;
+  sync.ensureSyncLayout(syncRoot);
+  // Ensure the shared sync key exists without printing it.
+  cryptoUtil.loadOrCreateKey(projectRoot);
 
   return http.createServer(async (req, res) => {
     try {
@@ -87,79 +128,257 @@ function createServer(db) {
         if (req.method === "GET" && pathname === "/api/health") {
           return sendJson(res, 200, {
             ok: true,
+            database: "sqlcipher",
+            milestone: "M7",
+            syncKeyFingerprint: cryptoUtil.keyFingerprint(projectRoot),
+            connectors: await secretStore.listConfiguredConnectors(),
             aiMode: ai.getAiMode(db),
-            syncKeyFingerprint: cryptoUtil.keyFingerprint(ROOT)
+            pairingPath: "/apps/hub/pairing.html",
+            homePath: "/apps/hub/home.html",
+            lifeCapture: true
           });
         }
 
         if (req.method === "GET" && pathname === "/api/transactions") {
+          const settings = dbApi.getSettings(db);
           return sendJson(res, 200, {
-            transactions: dbApi.listTransactions(db),
-            settings: dbApi.getSettings(db)
+            kind: "transactions",
+            rows: dbApi.listTransactions(db),
+            asOfDate: settings.asOfDate,
+            settings: {
+              monthlyIncome: settings.monthlyIncome,
+              weeklyIncome: settings.weeklyIncome,
+              weeklySavingsTarget: settings.weeklySavingsTarget
+            },
+            accounts: dbApi.listAccounts(db)
+          });
+        }
+
+        if (req.method === "GET" && pathname === "/api/accounts") {
+          return sendJson(res, 200, {
+            kind: "accounts",
+            accounts: dbApi.listAccounts(db)
+          });
+        }
+
+        if (req.method === "POST" && pathname === "/api/accounts") {
+          const body = await readBody(req);
+          const account = dbApi.createAccount(db, body);
+          return sendJson(res, 200, { ok: true, account });
+        }
+
+        if (req.method === "PATCH" && pathname.startsWith("/api/accounts/")) {
+          const id = decodeURIComponent(pathname.slice("/api/accounts/".length));
+          const body = await readBody(req);
+          const account = dbApi.updateAccount(db, id, body);
+          return sendJson(res, 200, { ok: true, account });
+        }
+
+        if (req.method === "POST" && pathname === "/api/import") {
+          const body = await readBody(req, { maxBytes: 8 * 1024 * 1024 });
+          if (!body.accountId || body.text == null) {
+            return sendJson(res, 400, { error: "accountId and text are required" });
+          }
+          const result = importer.importText(db, {
+            accountId: body.accountId,
+            text: body.text,
+            format: body.format || "auto"
+          });
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, result);
+        }
+
+        if (req.method === "POST" && pathname === "/api/simplefin/claim") {
+          const body = await readBody(req);
+          if (!body.setupToken) {
+            return sendJson(res, 400, { error: "setupToken is required" });
+          }
+          const result = await simplefin.claimSetupToken(body.setupToken, {
+            fetchImpl: options.fetchImpl
+          });
+          return sendJson(res, 200, result);
+        }
+
+        if (req.method === "GET" && pathname === "/api/simplefin/remote") {
+          const configured = Boolean(
+            await secretStore.getConnectorSecret("simplefin.accessUrl")
+          );
+          if (!configured) {
+            return sendJson(res, 200, {
+              configured: false,
+              accounts: [],
+              local: dbApi.listAccounts(db)
+            });
+          }
+          try {
+            const payload = await simplefin.fetchAccounts({
+              fetchImpl: options.fetchImpl
+            });
+            const remote = simplefin.listRemoteAccounts(payload);
+            const local = dbApi.listAccounts(db);
+            return sendJson(res, 200, {
+              configured: true,
+              accounts: remote.map((account) => ({
+                ...account,
+                linkedAccountId:
+                  local.find((row) => row.simplefinAccountId === account.id)?.id ||
+                  null
+              })),
+              local
+            });
+          } catch (error) {
+            return sendJson(res, 502, {
+              configured: true,
+              error: error.message || String(error),
+              accounts: [],
+              local: dbApi.listAccounts(db)
+            });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/simplefin/map") {
+          const body = await readBody(req);
+          if (!body.accountId || !body.simplefinAccountId) {
+            return sendJson(res, 400, {
+              error: "accountId and simplefinAccountId are required"
+            });
+          }
+          const account = dbApi.updateAccount(db, body.accountId, {
+            simplefinAccountId: body.simplefinAccountId
+          });
+          return sendJson(res, 200, { ok: true, account });
+        }
+
+        if (req.method === "POST" && pathname === "/api/simplefin/sync") {
+          const body = await readBody(req);
+          const forceMock = body.forceMock === true;
+          const result = await simplefin.syncToDb(db, {
+            forceMock,
+            fetchImpl: options.fetchImpl,
+            updateOpeningBalance: body.updateOpeningBalance === true
+          });
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, {
+            ok: true,
+            mode: result.mode,
+            inserted: result.inserted,
+            unmapped: result.unmapped,
+            remote: result.remote
           });
         }
 
         if (req.method === "GET" && pathname === "/api/snapshot") {
-          const settings = Object.fromEntries(url.searchParams.entries());
-          const parsed = {
-            monthlyIncome: settings.monthlyIncome
-              ? Number(settings.monthlyIncome)
-              : undefined,
-            weeklyIncome: settings.weeklyIncome
-              ? Number(settings.weeklyIncome)
-              : undefined,
-            weeklySavingsTarget: settings.weeklySavingsTarget
-              ? Number(settings.weeklySavingsTarget)
-              : undefined,
-            asOfDate: settings.asOfDate
-          };
-          const snapshot = dbApi.computeLiveSnapshot(db, parsed);
+          const snapshot = dbApi.computeLiveSnapshot(db);
           return sendJson(res, 200, {
-            snapshot,
-            redacted: dbApi.redactSnapshot(snapshot)
+            kind: "snapshot",
+            ...dbApi.redactSnapshot(snapshot)
           });
         }
 
-        if (req.method === "POST" && pathname === "/api/settings") {
+        if (req.method === "POST" && pathname === "/api/outbox") {
           const body = await readBody(req);
-          dbApi.saveSettings(db, body);
-          return sendJson(res, 200, { settings: dbApi.getSettings(db) });
-        }
-
-        if (req.method === "POST" && pathname === "/api/commit") {
-          const body = await readBody(req);
-          if (!Array.isArray(body.updates)) {
-            return sendJson(res, 400, { error: "updates[] required" });
+          const items = Array.isArray(body)
+            ? body
+            : Array.isArray(body.items)
+              ? body.items
+              : body.item
+                ? [body.item]
+                : [];
+          if (!items.length || items.some((item) => !item?.id || !item?.type)) {
+            return sendJson(res, 400, {
+              error: "items[] with stable id and type is required"
+            });
           }
-          const result = dbApi.commitTransactions(db, body.updates);
-          if (body.settings) dbApi.saveSettings(db, body.settings);
-          await sync.publishDown(db, ROOT, SYNC_ROOT);
-          return sendJson(res, 200, result);
+          const existingIds = new Set(dbApi.listSyncItems(db).map((item) => item.id));
+          items.forEach((item) => {
+            dbApi.upsertSyncItem(db, item);
+            if (existingIds.has(item.id)) return;
+            if (item.type === "action.transaction.update" && item.data) {
+              dbApi.commitTransactions(db, [item.data]);
+              dbApi.markActionExecuted(db, item.id, "executed", "Transaction updated");
+            } else if (item.type === "action.settings.update" && item.data) {
+              dbApi.saveSettings(db, item.data);
+              dbApi.markActionExecuted(db, item.id, "executed", "Settings updated");
+            }
+          });
+          sync.executePendingActions(db);
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, {
+            queued: items.length,
+            total: dbApi.listSyncItems(db).length
+          });
         }
 
         if (req.method === "POST" && pathname === "/api/sync/ingest") {
-          const processed = await sync.ingestAllPending(db, ROOT, SYNC_ROOT);
+          const processed = await sync.ingestAllPending(db, projectRoot, syncRoot);
+          const digest = sync.buildDigest(db);
           return sendJson(res, 200, {
             processed,
-            digest: sync.buildDigest(db),
-            items: dbApi.listSyncItems(db)
+            kind: "digest",
+            today: digest.today,
+            reading: digest.reading,
+            junk: digest.junk,
+            generatedAt: digest.generatedAt,
+            asOfDate: digest.asOfDate
+          });
+        }
+
+        if (req.method === "GET" && pathname === "/api/sync/pairing") {
+          const card = await pairing.buildPairing(projectRoot, {
+            hubUrl: `http://${HOST}:${PORT}`
+          });
+          // Return QR SVG + fingerprint only — do not also echo the raw key JSON.
+          return sendJson(res, 200, {
+            fingerprint: card.fingerprint,
+            hub: card.hub,
+            generatedAt: card.generatedAt,
+            svg: card.svg
           });
         }
 
         if (req.method === "GET" && pathname === "/api/digest") {
+          const digest = sync.buildDigest(db);
           return sendJson(res, 200, {
-            digest: sync.buildDigest(db),
-            items: dbApi.listSyncItems(db)
+            kind: "digest",
+            today: digest.today,
+            watching: digest.watching || [],
+            reading: digest.reading,
+            junk: digest.junk,
+            generatedAt: digest.generatedAt,
+            asOfDate: digest.asOfDate
           });
         }
 
         if (req.method === "POST" && pathname === "/api/connectors/run") {
           const body = await readBody(req);
-          const result = await connectors.runAll(db, {
-            forceMock: body.forceMock !== false
+          // Default mock so a casual POST never hits live GroupMe.
+          const forceMock = body.forceMock !== false;
+          const result = await connectors.runAll(db, { forceMock });
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, {
+            forceMock,
+            groupme: {
+              mode: result.groupme.mode,
+              emitted: result.groupme.emitted.length
+            },
+            sms: {
+              mode: result.sms.mode,
+              emitted: result.sms.emitted.length
+            },
+            email: {
+              mode: result.email.mode,
+              emitted: result.email.emitted.length
+            },
+            bank: {
+              mode: result.bank.mode,
+              emitted: result.bank.emitted.length
+            },
+            simplefin: {
+              mode: result.simplefin.mode,
+              inserted: result.simplefin.inserted,
+              unmapped: result.simplefin.unmapped?.length || 0
+            }
           });
-          await sync.publishDown(db, ROOT, SYNC_ROOT);
-          return sendJson(res, 200, result);
         }
 
         if (req.method === "GET" && pathname === "/api/ai/mode") {
@@ -172,12 +391,28 @@ function createServer(db) {
         }
 
         if (req.method === "POST" && pathname === "/api/ai/propose") {
+          const before = dbApi.listTransactions(db).length;
           const result = await ai.propose(db);
+          const after = dbApi.listTransactions(db).length;
+          if (after !== before) {
+            return sendJson(res, 500, { error: "AI propose mutated transactions" });
+          }
+          await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, result);
         }
 
         if (req.method === "GET" && pathname === "/api/ai/proposals") {
-          return sendJson(res, 200, { proposals: dbApi.listAiProposals(db) });
+          return sendJson(res, 200, {
+            proposals: dbApi.listAiProposals(db).map((row) => ({
+              id: row.id,
+              mode: row.mode,
+              promptSummary: row.promptSummary,
+              createdAt: row.createdAt,
+              accepted: row.accepted,
+              flags: row.body?.flags || [],
+              mutations: row.body?.mutations || []
+            }))
+          });
         }
 
         return sendJson(res, 404, { error: "Unknown API route" });
@@ -192,14 +427,21 @@ function createServer(db) {
   });
 }
 
-function main() {
-  const db = dbApi.openDatabase();
+async function main() {
+  const dbPath = process.env.HUB_DB_PATH || dbApi.DEFAULT_DB_PATH;
+  const encryptionKey = await secretStore.getOrCreateDatabaseKey(dbPath);
+  const db = dbApi.openDatabase({ dbPath, encryptionKey });
+  sync.ensureSyncLayout(SYNC_ROOT);
   const server = createServer(db);
   server.listen(PORT, HOST, () => {
     console.log(`Finance hub listening on http://${HOST}:${PORT}`);
+    console.log(`Hub home:  http://${HOST}:${PORT}/apps/hub/home.html`);
     console.log(`Money UI:  http://${HOST}:${PORT}/apps/money/money.html`);
     console.log(`Digest UI: http://${HOST}:${PORT}/apps/digest/digest.html`);
-    console.log(`DB passphrase from HUB_DB_PASSPHRASE (default dev passphrase)`);
+    console.log(`Pair phone: http://${HOST}:${PORT}/apps/hub/pairing.html`);
+    console.log(`SimpleFIN:  http://${HOST}:${PORT}/apps/hub/simplefin.html`);
+    console.log(`Encrypted DB key: ${secretStore.SERVICE} in the OS keychain`);
+    console.log(`Sync folder: ${SYNC_ROOT}`);
   });
 
   const shutdown = () => {
@@ -213,7 +455,10 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }
 
 module.exports = { createServer, ROOT, SYNC_ROOT };

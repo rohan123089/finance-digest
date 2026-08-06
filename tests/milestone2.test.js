@@ -10,10 +10,9 @@ const { createServer } = require("../hub/server.js");
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fd-m2-"));
 const dbPath = path.join(tmpRoot, "test.db");
-process.env.HUB_DB_PASSPHRASE = "test-passphrase";
 process.env.HUB_SYNC_ROOT = path.join(tmpRoot, "sync");
 
-const db = dbApi.openDatabase({ dbPath, passphrase: "test-passphrase" });
+const db = dbApi.openDatabase({ seedSample: true, dbPath, passphrase: "test-passphrase" });
 const server = createServer(db);
 
 function request(port, method, urlPath, body) {
@@ -87,8 +86,7 @@ server.listen(0, "127.0.0.1", async () => {
 
     server.close(() => {
       db.close();
-      const reopened = dbApi.openDatabase({
-        dbPath,
+      const reopened = dbApi.openDatabase({ seedSample: true, dbPath,
         passphrase: "test-passphrase"
       });
       assert.equal(dbApi.listTransactions(reopened).length, 25);

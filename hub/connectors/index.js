@@ -1,115 +1,256 @@
 "use strict";
 
 /**
- * Connectors run on the hub only. Secrets stay in env / hub process memory.
- * Without credentials they run in mock mode and still emit deterministic signals.
+ * Hub-only connectors. Secrets live in the OS keychain and are used via Net.call.
+ * HTML / Shelf never see tokens. Default is mock.
  */
 
 const dbApi = require("../db.js");
-
-async function fetchJson(url, headers = {}) {
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}`);
-  }
-  return response.json();
-}
+const Net = require("../net.js");
+const life = require("../../engine/life.js");
+const simplefin = require("./simplefin.js");
 
 async function runGroupMe(db, options = {}) {
-  const token = options.token || process.env.GROUPME_TOKEN;
+  const forceMock = options.forceMock !== false;
   const watermark = dbApi.getConnectorWatermark(db, "groupme") || "0";
   let messages;
+  let mode = "mock";
 
-  if (!token || options.forceMock) {
+  if (forceMock) {
     messages = [
       {
         id: "998877",
-        text: "Dinner Friday 7pm at Luigi's",
-        created_at: Math.floor(Date.now() / 1000)
+        text: "Dinner Friday 7pm at Luigi's — who's in?",
+        created_at: Math.floor(Date.now() / 1000),
+        name: "Sam"
+      },
+      {
+        id: "998878",
+        text: "Study group tonight in the library for midterm",
+        created_at: Math.floor(Date.now() / 1000) + 1,
+        name: "Alex"
       }
     ];
   } else {
-    const groupId = options.groupId || process.env.GROUPME_GROUP_ID;
-    if (!groupId) throw new Error("GROUPME_GROUP_ID required when token is set");
-    const data = await fetchJson(
-      `https://api.groupme.com/v3/groups/${groupId}/messages?limit=20&token=${encodeURIComponent(token)}`
-    );
+    const data = await Net.call("groupme", { limit: 20 });
     messages = data?.response?.messages || [];
+    mode = "live";
   }
 
   const emitted = [];
+  const collectedAt = new Date().toISOString();
   messages.forEach((message) => {
     if (String(message.id) <= String(watermark) && watermark !== "0") return;
-    const item = {
-      id: `gm:${message.id}`,
-      type: "signal.event",
+    const receivedAt = new Date((message.created_at || Date.now() / 1000) * 1000).toISOString();
+    const signals = life.extractFromChat({
+      id: String(message.id),
+      text: message.text || "",
+      from: message.name || "groupme",
+      receivedAt,
       source: "groupme",
-      at: new Date((message.created_at || 0) * 1000).toISOString(),
-      collectedAt: new Date().toISOString(),
-      data: {
-        title: String(message.text || "GroupMe event").slice(0, 120),
-        start: new Date((message.created_at || Date.now() / 1000) * 1000).toISOString(),
-        sourceRef: `groupme:msg/${message.id}`
+      sourceRef: `groupme:msg/${message.id}`
+    });
+    if (!signals.length && message.text) {
+      signals.push({
+        id: `gm:${message.id}`,
+        type: "signal.event",
+        source: "groupme",
+        at: receivedAt,
+        data: {
+          title: String(message.text).slice(0, 120),
+          start: receivedAt,
+          domain: life.inferDomain(String(message.text), "groupme"),
+          sourceRef: `groupme:msg/${message.id}`,
+          dismissible: true
+        }
+      });
+    }
+    signals.forEach((item) => {
+      const row = { ...item, collectedAt };
+      if (row.id.startsWith("life:")) {
+        // keep life ids; also alias gm: for watermark continuity in tests
       }
-    };
-    dbApi.upsertSyncItem(db, item);
-    emitted.push(item);
+      dbApi.upsertSyncItem(db, row);
+      emitted.push(row);
+    });
     dbApi.setConnectorWatermark(db, "groupme", String(message.id));
   });
 
-  return { source: "groupme", mode: token && !options.forceMock ? "live" : "mock", emitted };
+  return { source: "groupme", mode, emitted };
 }
 
-async function runEmail(db, options = {}) {
-  const clientId = options.clientId || process.env.EMAIL_OAUTH_CLIENT_ID;
-  const watermark = dbApi.getConnectorWatermark(db, "email") || "";
-  let links;
+async function runSms(db, options = {}) {
+  const forceMock = options.forceMock !== false;
+  const watermark = dbApi.getConnectorWatermark(db, "sms") || "";
+  let messages;
+  let mode = "mock";
 
-  if (!clientId || options.forceMock) {
-    links = [
+  if (forceMock) {
+    messages = [
       {
-        id: "mail-1001",
-        url: "https://example.com/piece",
-        sharedBy: "newsletter",
+        id: "sms-5001",
+        text: "Movie Saturday 8pm? Can dismiss if busy — just wanted you to know.",
+        from: "Jordan",
+        receivedAt: new Date().toISOString()
+      },
+      {
+        id: "sms-5002",
+        text: "Don't forget: rent due by Aug 1",
+        from: "Landlord",
+        receivedAt: new Date().toISOString()
+      },
+      {
+        id: "sms-5003",
+        text: "Check this out https://example.com/sms-piece",
+        from: "Sam",
         receivedAt: new Date().toISOString()
       }
     ];
+  } else if (typeof options.messages === "function") {
+    messages = await options.messages();
+    mode = "live";
   } else {
-    // Live OAuth path is scaffolded: token exchange remains hub-side only.
-    throw new Error(
-      "Live email OAuth is configured but not fully wired; use mock mode or complete token exchange"
-    );
+    // Live SMS arrives via phone Shelf outbox (signal.sms), not hub pull.
+    return {
+      source: "sms",
+      mode: "device",
+      emitted: [],
+      note: "SMS is collected on Shelf and pushed in sync/up outbox"
+    };
   }
 
   const emitted = [];
-  links.forEach((link) => {
-    if (watermark && link.id <= watermark) return;
-    const item = {
-      id: `sms:${link.id}`,
-      type: "signal.link",
-      source: "email",
-      at: link.receivedAt,
-      collectedAt: new Date().toISOString(),
-      data: {
-        url: link.url,
-        sharedBy: link.sharedBy,
-        context: null
-      }
-    };
-    dbApi.upsertSyncItem(db, item);
-    emitted.push(item);
-    dbApi.setConnectorWatermark(db, "email", link.id);
+  const collectedAt = new Date().toISOString();
+  messages.forEach((message) => {
+    if (watermark && String(message.id) <= String(watermark)) return;
+    const signals = life.extractFromChat({
+      id: String(message.id),
+      text: message.text || "",
+      from: message.from || "sms",
+      receivedAt: message.receivedAt || collectedAt,
+      source: "sms",
+      sourceRef: `sms:${message.id}`,
+      url: message.url
+    });
+    signals.forEach((item) => {
+      const row = { ...item, collectedAt };
+      dbApi.upsertSyncItem(db, row);
+      emitted.push(row);
+    });
+    dbApi.setConnectorWatermark(db, "sms", String(message.id));
   });
 
-  return { source: "email", mode: clientId && !options.forceMock ? "live" : "mock", emitted };
+  return { source: "sms", mode, emitted };
+}
+
+function mockLifeMessages() {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "mail-1001",
+      subject: "Weekend reading from Acme Digest",
+      snippet: "Here's a piece we liked: https://example.com/piece",
+      from: "newsletter@acme.example",
+      sharedBy: "newsletter",
+      url: "https://example.com/piece",
+      receivedAt: now,
+      source: "email"
+    },
+    {
+      id: "mail-2002",
+      subject: "CS 240 assignment 4",
+      snippet: "Please submit Assignment 4 on Canvas. Due by 2026-08-12.",
+      from: "prof@state.edu",
+      receivedAt: now,
+      source: "email"
+    },
+    {
+      id: "mail-3003",
+      subject: "Client kickoff meeting",
+      snippet: "Teams meeting tomorrow at 10:00. Action required: review the brief.",
+      from: "pm@work.example",
+      receivedAt: now,
+      source: "email"
+    },
+    {
+      id: "mail-5005",
+      subject: "Your UWCU e-Statement is ready",
+      snippet:
+        "Your University of Wisconsin Credit Union monthly statement is available. Download CSV from online banking, then import into Money.",
+      from: "estatements@uwcu.org",
+      receivedAt: now,
+      source: "email"
+    }
+  ];
+}
+
+async function runEmail(db, options = {}) {
+  const forceMock = options.forceMock !== false;
+  const watermark = dbApi.getConnectorWatermark(db, "email") || "";
+  let messages;
+  let mode = "mock";
+
+  if (forceMock) {
+    messages = mockLifeMessages();
+  } else {
+    const data = await Net.call("email", { maxResults: 15 });
+    messages = Array.isArray(data.messages) ? data.messages : [];
+    // Back-compat: older Net.call shape returned links only.
+    if (!messages.length && Array.isArray(data.links)) {
+      messages = data.links.map((link) => ({
+        id: link.id,
+        subject: link.title || "",
+        snippet: link.url || "",
+        from: link.sharedBy || "email",
+        sharedBy: link.sharedBy,
+        url: link.url,
+        receivedAt: link.receivedAt,
+        source: "email"
+      }));
+    }
+    mode = "live";
+  }
+
+  const emitted = [];
+  const collectedAt = new Date().toISOString();
+  messages.forEach((message) => {
+    if (watermark && String(message.id) <= String(watermark)) return;
+    const signals = life.extractFromMessage(
+      { ...message, source: "email", sourceRef: `email:${message.id}` },
+      {}
+    );
+    if (!signals.length && message.url) {
+      signals.push({
+        id: `email:${message.id}`,
+        type: "signal.link",
+        source: "email",
+        at: message.receivedAt || collectedAt,
+        data: {
+          url: message.url,
+          sharedBy: message.sharedBy || "email",
+          context: null,
+          domain: "personal"
+        }
+      });
+    }
+    signals.forEach((item) => {
+      const row = { ...item, collectedAt };
+      dbApi.upsertSyncItem(db, row);
+      emitted.push(row);
+    });
+    dbApi.setConnectorWatermark(db, "email", String(message.id));
+  });
+
+  return { source: "email", mode, emitted };
 }
 
 async function runBank(db, options = {}) {
-  const token = options.token || process.env.BANK_READONLY_TOKEN;
+  const forceMock = options.forceMock !== false;
   const watermark = dbApi.getConnectorWatermark(db, "bank") || "";
   let rows;
+  let mode = "mock";
 
-  if (!token || options.forceMock) {
+  if (forceMock) {
     rows = [
       {
         id: "bank-tx-9001",
@@ -120,32 +261,67 @@ async function runBank(db, options = {}) {
       }
     ];
   } else {
-    throw new Error(
-      "Live read-only bank path is configured but not fully wired; use mock mode"
-    );
+    const data = await Net.call("bank");
+    rows = Array.isArray(data.transactions) ? data.transactions : [];
+    mode = "live";
   }
 
   const emitted = [];
   rows.forEach((row) => {
-    if (watermark && row.id <= watermark) return;
-    dbApi.insertRawTransaction(db, row);
+    if (!row?.id || !row?.rawMerchant) return;
+    if (watermark && String(row.id) <= String(watermark)) return;
+    dbApi.insertRawTransaction(db, {
+      id: String(row.id),
+      date: row.date || new Date().toISOString().slice(0, 10),
+      rawMerchant: row.rawMerchant,
+      amount: Number(row.amount) || 0,
+      account: row.account || "checking"
+    });
     emitted.push(row);
-    dbApi.setConnectorWatermark(db, "bank", row.id);
+    dbApi.setConnectorWatermark(db, "bank", String(row.id));
   });
 
-  return { source: "bank", mode: token && !options.forceMock ? "live" : "mock", emitted };
+  return { source: "bank", mode, emitted };
+}
+
+async function runSimpleFin(db, options = {}) {
+  const forceMock = options.forceMock !== false;
+  try {
+    return await simplefin.syncToDb(db, {
+      forceMock,
+      fetchImpl: options.fetchImpl,
+      updateOpeningBalance: false
+    });
+  } catch (error) {
+    if (forceMock) throw error;
+    // Live SimpleFIN is optional until claimed; do not fail the whole connector run.
+    return {
+      source: "simplefin",
+      mode: "skipped",
+      error: error.message || String(error),
+      remote: [],
+      unmapped: [],
+      emitted: [],
+      inserted: 0
+    };
+  }
 }
 
 async function runAll(db, options = {}) {
-  const groupme = await runGroupMe(db, options);
-  const email = await runEmail(db, options);
-  const bank = await runBank(db, options);
-  return { groupme, email, bank };
+  const forceMock = options.forceMock !== false;
+  const groupme = await runGroupMe(db, { forceMock });
+  const sms = await runSms(db, { forceMock });
+  const email = await runEmail(db, { forceMock });
+  const bank = await runBank(db, { forceMock });
+  const simplefinResult = await runSimpleFin(db, options);
+  return { groupme, sms, email, bank, simplefin: simplefinResult };
 }
 
 module.exports = {
   runGroupMe,
+  runSms,
   runEmail,
   runBank,
+  runSimpleFin,
   runAll
 };

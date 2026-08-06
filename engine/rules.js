@@ -5,11 +5,16 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  // Legacy sample ids + starter registry ids. Prefer DB accountTypes at runtime.
   const ACCOUNT_TYPES = {
     checking: "cash",
     savings: "cash",
+    "uwcu-checking": "cash",
+    "uwcu-savings": "cash",
     vanguard: "investment",
-    "parents-card": "external"
+    amex: "liability",
+    discover: "liability",
+    "outside-payments": "external"
   };
 
   // First match wins. Edit this table to change categorization.
@@ -46,14 +51,27 @@
       transferAccount: "vanguard"
     },
     {
+      contains: "outside payment reimbursement",
+      direction: "transfer",
+      merchant: "Outside Payments Reimbursement",
+      transferAccount: "outside-payments"
+    },
+    {
       contains: "parents reimbursement",
       direction: "transfer",
-      merchant: "Parents' Card Reimbursement",
-      transferAccount: "parents-card"
+      merchant: "Outside Payments Reimbursement",
+      transferAccount: "outside-payments"
     }
   ];
 
   const AMBIGUOUS_MERCHANTS = ["venmo", "paypal", "cash app", "zelle"];
+
+  const VALID_ACCOUNT_TYPES = new Set([
+    "cash",
+    "investment",
+    "liability",
+    "external"
+  ]);
 
   function cleanMerchant(rawMerchant) {
     return String(rawMerchant || "")
@@ -79,18 +97,42 @@
     return match ? match.category : "uncategorized";
   }
 
-  function normalizeTransaction(raw) {
+  function resolveAccountTypes(override) {
+    if (override && typeof override === "object" && Object.keys(override).length) {
+      return override;
+    }
+    return ACCOUNT_TYPES;
+  }
+
+  function normalizeTransaction(raw, accountTypesOverride) {
+    const accountTypes = resolveAccountTypes(accountTypesOverride);
     const typingRule = findSubstringRule(raw.rawMerchant, TYPING_RULES);
     const ambiguous = AMBIGUOUS_MERCHANTS.some((name) =>
       String(raw.rawMerchant || "").toLowerCase().includes(name)
     );
-    const accountType = ACCOUNT_TYPES[raw.account];
+    const accountType = accountTypes[raw.account];
     if (!accountType) throw new Error(`Unknown account: ${raw.account}`);
+    if (!VALID_ACCOUNT_TYPES.has(accountType)) {
+      throw new Error(`Invalid account type for ${raw.account}: ${accountType}`);
+    }
 
     let direction = typingRule ? typingRule.direction : "out";
     if (ambiguous && !typingRule) direction = "";
 
+    // Prefer an explicit direction hint from import/SimpleFIN when not ambiguous.
+    if (!typingRule && !ambiguous && raw.directionHint) {
+      const hint = String(raw.directionHint);
+      if (hint === "in" || hint === "out" || hint === "transfer") direction = hint;
+    }
+
     const merchant = typingRule?.merchant || cleanMerchant(raw.rawMerchant);
+    const savingsHint =
+      accountTypes.savings
+        ? "savings"
+        : accountTypes["uwcu-savings"]
+          ? "uwcu-savings"
+          : "";
+
     return {
       id: String(raw.id),
       account: raw.account,
@@ -100,20 +142,23 @@
       merchant,
       amount: Math.abs(Number(raw.amount)),
       date: raw.date,
-      needsReview: ambiguous || (!typingRule && direction !== "out" && direction !== "in"),
+      needsReview:
+        ambiguous || (!typingRule && direction !== "out" && direction !== "in"),
       transferAccount: typingRule?.transferAccount || "",
-      suggestedTransferAccount: ambiguous ? "savings" : ""
+      suggestedTransferAccount: ambiguous ? savingsHint : ""
     };
   }
 
-  function normalizeTransactions(rows) {
-    return rows.map(normalizeTransaction);
+  function normalizeTransactions(rows, accountTypesOverride) {
+    return rows.map((row) => normalizeTransaction(row, accountTypesOverride));
   }
 
   return {
     ACCOUNT_TYPES,
+    VALID_ACCOUNT_TYPES,
     CATEGORY_RULES,
     TYPING_RULES,
+    AMBIGUOUS_MERCHANTS,
     categoryFor,
     cleanMerchant,
     normalizeTransaction,

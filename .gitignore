@@ -7,6 +7,9 @@ sync/meta/*.json
 !sync/up/.gitkeep
 !sync/down/.gitkeep
 !sync/meta/.gitkeep
+hub/sync/up/**
+hub/sync/down/**
+hub/sync/meta/**
 *.db
 *.db-*
 *.work.sqlite

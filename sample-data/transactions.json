@@ -15,8 +15,8 @@
   { "id": "tx-013", "date": "2026-07-11", "rawMerchant": "TRADER JOE'S #431", "amount": 91.22, "account": "checking" },
   { "id": "tx-014", "date": "2026-07-16", "rawMerchant": "SHELL OIL 5742", "amount": 48.31, "account": "checking" },
   { "id": "tx-015", "date": "2026-07-21", "rawMerchant": "CVS PHARMACY #188", "amount": 23.8, "account": "checking" },
-  { "id": "tx-016", "date": "2026-07-24", "rawMerchant": "CHIPOTLE PARENTS CARD", "amount": 86.25, "account": "parents-card" },
-  { "id": "tx-017", "date": "2026-07-28", "rawMerchant": "PARENTS REIMBURSEMENT", "amount": 50, "account": "checking" },
+  { "id": "tx-016", "date": "2026-07-24", "rawMerchant": "CHIPOTLE OUTSIDE PAYMENT", "amount": 86.25, "account": "outside-payments" },
+  { "id": "tx-017", "date": "2026-07-28", "rawMerchant": "OUTSIDE PAYMENT REIMBURSEMENT", "amount": 50, "account": "checking" },
 
   { "id": "tx-018", "date": "2026-08-03", "rawMerchant": "ACME PAYROLL 0803", "amount": 5200, "account": "checking" },
   { "id": "tx-019", "date": "2026-08-02", "rawMerchant": "AUGUST RENT", "amount": 1650, "account": "checking" },

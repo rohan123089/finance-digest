@@ -21,9 +21,8 @@ async function main() {
   );
 
   // Point sample seed path via openDatabase samplePath.
-  const db = dbApi.openDatabase({
-    dbPath,
-    passphrase: "sync-test",
+  const db = dbApi.openDatabase({ seedSample: true, dbPath,
+    encryptionKey: Buffer.from("sync-test-key-32-bytes-long!!!!"),
     samplePath: path.join(tmpRoot, "sample-data", "transactions.json")
   });
 
@@ -96,7 +95,7 @@ async function main() {
   assert.equal(refused, true);
 
   db.close();
-  console.log("Milestone 3 sync ingest checks passed.");
+  console.log("Milestone 3 (legacy) sync ingest checks passed.");
 }
 
 main().catch((error) => {

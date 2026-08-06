@@ -85,19 +85,6 @@
       outline: none;
     }
     input:focus, select:focus { border-color: var(--blue); }
-    button.commit {
-      border: 0;
-      border-radius: 6px;
-      background: var(--accent);
-      color: #062316;
-      font-weight: 700;
-      padding: 8px 10px;
-      cursor: pointer;
-    }
-    button.commit:disabled {
-      opacity: .45;
-      cursor: not-allowed;
-    }
     .metrics {
       display: grid;
       grid-template-columns: repeat(6, minmax(120px, 1fr));
@@ -128,8 +115,7 @@
       padding: 10px 12px;
       border-bottom: 1px solid var(--line);
     }
-    h1, h2, p { margin: 0; }
-    h2 { font-size: 14px; }
+    h2 { margin: 0; font-size: 14px; }
     .review-count { color: var(--warn); font-weight: 700; }
     .table-wrap {
       max-height: calc(100vh - 275px);
@@ -154,7 +140,6 @@
       background: rgba(255, 207, 102, .1);
       box-shadow: inset 3px 0 var(--warn);
     }
-    tbody tr.dirty { outline: 1px solid #3d5a78; }
     td.amount { text-align: right; font-variant-numeric: tabular-nums; }
     td .direction { width: 98px; }
     td .category { width: 126px; }
@@ -172,7 +157,6 @@
       text-transform: uppercase;
     }
     .side { display: grid; gap: 12px; }
-    .side .panel { overflow: hidden; }
     .list { padding: 5px 12px 10px; }
     .list-row {
       display: grid;
@@ -182,7 +166,11 @@
       border-bottom: 1px solid #202c38;
     }
     .list-row:last-child { border-bottom: 0; }
-    .list-row span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .list-row span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .bar {
       height: 4px;
       margin-top: 4px;
@@ -192,7 +180,20 @@
     }
     .bar i { display: block; height: 100%; background: var(--blue); }
     .empty { padding: 12px; color: var(--muted); }
-    .footnote { color: var(--muted); font-size: 11px; padding: 9px 12px; border-top: 1px solid var(--line); }
+    .footnote {
+      color: var(--muted);
+      font-size: 11px;
+      padding: 9px 12px;
+      border-top: 1px solid var(--line);
+    }
+    .boot-error {
+      margin: 40px auto;
+      width: min(520px, 90%);
+      padding: 20px;
+      border: 1px solid var(--danger);
+      border-radius: 10px;
+      color: var(--danger);
+    }
     @media (max-width: 1000px) {
       header, .workspace { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: repeat(3, 1fr); }
@@ -201,7 +202,7 @@
   </style>
 </head>
 <body>
-  <main class="app">
+  <main class="app" id="app" hidden>
     <header>
       <section class="hero">
         <div>
@@ -210,9 +211,9 @@
           <div class="safe-detail" id="safe-detail"></div>
         </div>
         <div>
-          <div class="eyebrow">Mode</div>
-          <strong id="mode-label">Loading…</strong>
-          <div class="safe-detail" id="mode-detail"></div>
+          <div class="eyebrow">Bridge</div>
+          <strong id="bridge-label">Shelf</strong>
+          <div class="safe-detail" id="bridge-detail">Rules-first · offline</div>
         </div>
       </section>
       <section class="panel config" aria-label="Weekly settings">
@@ -229,8 +230,8 @@
           <input id="monthly-income" type="number" min="0" step="100" value="5200">
         </label>
         <label>
-          <span>Persist</span>
-          <button class="commit" id="commit-btn" type="button" disabled>Commit changes</button>
+          <span>Edits</span>
+          <input id="edit-note" value="In memory until Shelf persists" disabled>
         </label>
       </section>
     </header>
@@ -241,7 +242,7 @@
       <div class="metric"><div class="eyebrow">Invested</div><strong id="invested"></strong></div>
       <div class="metric"><div class="eyebrow">Savings rate</div><strong id="savings-rate"></strong></div>
       <div class="metric"><div class="eyebrow">Runway</div><strong id="runway"></strong></div>
-      <div class="metric external"><div class="eyebrow">Owed · parents' card</div><strong id="owed"></strong></div>
+      <div class="metric external"><div class="eyebrow">Owed · outside payments</div><strong id="owed"></strong></div>
     </section>
 
     <section class="workspace">
@@ -266,7 +267,10 @@
             <tbody id="transactions"></tbody>
           </table>
         </div>
-        <div class="footnote" id="footnote">Edits draft in memory until you commit.</div>
+        <div class="footnote">
+          HTML talks only to <code>window.Shelf</code>. The hub owns persistence
+          and snapshot math; file mode uses the local mock.
+        </div>
       </section>
 
       <aside class="side">
@@ -281,60 +285,41 @@
         <section class="panel">
           <div class="panel-heading"><h2>Account balances</h2></div>
           <div class="list" id="accounts"></div>
+          <div class="account-actions" style="display:grid;gap:8px;padding:12px 14px 14px;border-top:1px solid var(--line)">
+            <div class="eyebrow">Manage</div>
+            <button type="button" id="add-account" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add account</button>
+            <label style="display:grid;gap:4px">
+              <span class="eyebrow">Import CSV/OFX into</span>
+              <select id="import-account" aria-label="Import account"></select>
+            </label>
+            <input id="import-file" type="file" accept=".csv,.ofx,.qfx,text/csv" style="font-size:12px;color:var(--muted)">
+            <a id="simplefin-link" href="/apps/hub/simplefin.html" style="color:var(--accent);font-size:12px">Link SimpleFIN →</a>
+          </div>
         </section>
       </aside>
     </section>
   </main>
+  <div class="boot-error" id="boot-error" hidden></div>
 
+  <!-- Shelf selects the native bridge, localhost relay, or offline mock. -->
+  <script src="../shelf/hub-shelf.js"></script>
+  <script src="../shelf/mock-shelf.js"></script>
   <script src="../../engine/rules.js"></script>
   <script src="../../engine/model.js"></script>
   <script>
     "use strict";
 
-    const SAMPLE_TRANSACTIONS = [
-      { id: "tx-001", date: "2026-06-01", rawMerchant: "ACME PAYROLL 0601", amount: 5200, account: "checking" },
-      { id: "tx-002", date: "2026-06-02", rawMerchant: "JUNE RENT", amount: 1650, account: "checking" },
-      { id: "tx-003", date: "2026-06-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
-      { id: "tx-004", date: "2026-06-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
-      { id: "tx-005", date: "2026-06-10", rawMerchant: "TRADER JOE'S #431", amount: 82.64, account: "checking" },
-      { id: "tx-006", date: "2026-06-14", rawMerchant: "CORNER COFFEE", amount: 6.75, account: "checking" },
-      { id: "tx-007", date: "2026-06-18", rawMerchant: "VANGUARD BUY VTSAX", amount: 600, account: "checking" },
-      { id: "tx-008", date: "2026-06-23", rawMerchant: "TRANSFER TO SAVINGS", amount: 400, account: "checking" },
-      { id: "tx-009", date: "2026-07-01", rawMerchant: "ACME PAYROLL 0701", amount: 5200, account: "checking" },
-      { id: "tx-010", date: "2026-07-02", rawMerchant: "JULY RENT", amount: 1650, account: "checking" },
-      { id: "tx-011", date: "2026-07-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
-      { id: "tx-012", date: "2026-07-07", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
-      { id: "tx-013", date: "2026-07-11", rawMerchant: "TRADER JOE'S #431", amount: 91.22, account: "checking" },
-      { id: "tx-014", date: "2026-07-16", rawMerchant: "SHELL OIL 5742", amount: 48.31, account: "checking" },
-      { id: "tx-015", date: "2026-07-21", rawMerchant: "CVS PHARMACY #188", amount: 23.8, account: "checking" },
-      { id: "tx-016", date: "2026-07-24", rawMerchant: "CHIPOTLE PARENTS CARD", amount: 86.25, account: "parents-card" },
-      { id: "tx-017", date: "2026-07-28", rawMerchant: "PARENTS REIMBURSEMENT", amount: 50, account: "checking" },
-      { id: "tx-018", date: "2026-08-03", rawMerchant: "ACME PAYROLL 0803", amount: 5200, account: "checking" },
-      { id: "tx-019", date: "2026-08-02", rawMerchant: "AUGUST RENT", amount: 1650, account: "checking" },
-      { id: "tx-020", date: "2026-08-04", rawMerchant: "NETFLIX.COM", amount: 15.49, account: "checking" },
-      { id: "tx-021", date: "2026-08-05", rawMerchant: "SPOTIFY USA", amount: 11.99, account: "checking" },
-      { id: "tx-022", date: "2026-08-05", rawMerchant: "WHOLE FOODS MARKET", amount: 63.17, account: "checking" },
-      { id: "tx-023", date: "2026-08-05", rawMerchant: "CHIPOTLE 2219", amount: 14.28, account: "checking" },
-      { id: "tx-024", date: "2026-08-05", rawMerchant: "VENMO PAYMENT 8831", amount: 72, account: "checking" },
-      { id: "tx-025", date: "2026-08-05", rawMerchant: "LANDMARK CINEMA", amount: 18.5, account: "checking" }
-    ];
-
     const CATEGORIES = [
       "income", "groceries", "dining", "housing", "transportation", "utilities",
       "subscriptions", "health", "shopping", "entertainment", "uncategorized"
     ];
-    const ACCOUNT_LABELS = {
-      checking: "Checking",
-      savings: "Savings",
-      vanguard: "Vanguard",
-      "parents-card": "Parents' card"
-    };
 
     const state = {
-      hubMode: false,
       transactions: [],
-      dirtyIds: new Set(),
-      baseline: new Map()
+      asOfDate: "2026-08-05",
+      snapshot: null,
+      accounts: [],
+      accountLabels: {}
     };
 
     const currency = new Intl.NumberFormat("en-US", {
@@ -351,8 +336,6 @@
     const weeklyIncomeInput = document.querySelector("#weekly-income");
     const monthlyIncomeInput = document.querySelector("#monthly-income");
     const weeklySavingsInput = document.querySelector("#weekly-savings");
-    const commitBtn = document.querySelector("#commit-btn");
-    weeklyIncomeInput.value = (Number(monthlyIncomeInput.value) / 4.345).toFixed(2);
 
     function option(value, label, selected) {
       return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
@@ -360,44 +343,24 @@
 
     function escapeHtml(value) {
       const element = document.createElement("span");
-      element.textContent = value;
+      element.textContent = value == null ? "" : String(value);
       return element.innerHTML;
     }
 
-    function cloneTx(tx) {
-      return { ...tx };
+    function settings() {
+      return {
+        asOfDate: state.asOfDate,
+        monthlyIncome: Number(monthlyIncomeInput.value) || 0,
+        weeklyIncome: Number(weeklyIncomeInput.value) || 0,
+        weeklySavingsTarget: Number(weeklySavingsInput.value) || 0
+      };
     }
 
-    function rememberBaseline(rows) {
-      state.baseline.clear();
-      rows.forEach((tx) => {
-        state.baseline.set(tx.id, {
-          direction: tx.direction || "",
-          category: tx.category || "",
-          transferAccount: tx.transferAccount || ""
-        });
-      });
-      state.dirtyIds.clear();
-      updateCommitButton();
-    }
-
-    function markDirty(tx) {
-      const baseline = state.baseline.get(tx.id);
-      const dirty = !baseline ||
-        baseline.direction !== (tx.direction || "") ||
-        baseline.category !== (tx.category || "") ||
-        baseline.transferAccount !== (tx.transferAccount || "");
-      if (dirty) state.dirtyIds.add(tx.id);
-      else state.dirtyIds.delete(tx.id);
-      updateCommitButton();
-    }
-
-    function updateCommitButton() {
-      const count = state.dirtyIds.size;
-      commitBtn.disabled = count === 0;
-      commitBtn.textContent = count
-        ? `Commit ${count} change${count === 1 ? "" : "s"}`
-        : "Commit changes";
+    function updateReviewState(tx) {
+      tx.needsReview =
+        !tx.direction ||
+        (tx.direction === "transfer" && !tx.transferAccount) ||
+        (tx.direction !== "transfer" && !tx.category);
     }
 
     function renderTable() {
@@ -415,34 +378,21 @@
         ].join("");
         const targetOptions = [
           option("", "Choose…", tx.transferAccount),
-          ...Object.keys(ACCOUNT_LABELS)
+          ...Object.keys(state.accountLabels)
             .filter((account) => account !== tx.account)
-            .map((account) => option(account, ACCOUNT_LABELS[account], tx.transferAccount))
+            .map((account) => option(account, state.accountLabels[account], tx.transferAccount))
         ].join("");
-        const classes = [
-          tx.needsReview ? "needs-review" : "",
-          state.dirtyIds.has(tx.id) ? "dirty" : ""
-        ].filter(Boolean).join(" ");
         return `
-          <tr data-id="${tx.id}" class="${classes}">
-            <td>${tx.date.slice(5)}</td>
+          <tr data-id="${escapeHtml(tx.id)}" class="${tx.needsReview ? "needs-review" : ""}">
+            <td>${escapeHtml(tx.date.slice(5))}</td>
             <td class="merchant" title="${escapeHtml(tx.merchant)}">${escapeHtml(tx.merchant)}</td>
-            <td><span class="badge">${escapeHtml(ACCOUNT_LABELS[tx.account] || tx.account)}</span></td>
+            <td><span class="badge">${escapeHtml(state.accountLabels[tx.account] || tx.account)}</span></td>
             <td class="amount">${preciseCurrency.format(tx.amount)}</td>
             <td><select class="direction" aria-label="Direction for ${escapeHtml(tx.merchant)}">${directionOptions}</select></td>
             <td><select class="category" ${tx.direction === "transfer" || !tx.direction ? "disabled" : ""} aria-label="Category for ${escapeHtml(tx.merchant)}">${categoryOptions}</select></td>
             <td><select class="target" ${tx.direction === "transfer" ? "" : "disabled"} aria-label="Transfer destination for ${escapeHtml(tx.merchant)}">${targetOptions}</select></td>
           </tr>`;
       }).join("");
-    }
-
-    function settings() {
-      return {
-        asOfDate: "2026-08-05",
-        monthlyIncome: Number(monthlyIncomeInput.value) || 0,
-        weeklyIncome: Number(weeklyIncomeInput.value) || 0,
-        weeklySavingsTarget: Number(weeklySavingsInput.value) || 0
-      };
     }
 
     function renderList(selector, rows, emptyText) {
@@ -452,7 +402,8 @@
     }
 
     function renderSnapshot() {
-      const snapshot = MoneyModel.computeSnapshot(state.transactions, settings());
+      const snapshot = state.snapshot;
+      if (!snapshot) return;
       const safeValue = document.querySelector("#safe-value");
       safeValue.textContent = currency.format(snapshot.safeToSpend.remaining);
       safeValue.classList.toggle("negative", snapshot.safeToSpend.remaining < 0);
@@ -465,7 +416,7 @@
       document.querySelector("#liquid").textContent = currency.format(snapshot.liquid);
       document.querySelector("#invested").textContent = currency.format(snapshot.invested);
       document.querySelector("#savings-rate").textContent =
-        `${(snapshot.savingsRate * 100).toFixed(1)}%`;
+        `${Number(snapshot.savingsRatePct).toFixed(1)}%`;
       document.querySelector("#runway").textContent = `${snapshot.runwayMonths.toFixed(1)} mo`;
       document.querySelector("#owed").textContent = currency.format(snapshot.owed);
       document.querySelector("#expense-total").textContent = currency.format(snapshot.expenses);
@@ -489,23 +440,139 @@
 
       renderList("#accounts", Object.entries(snapshot.balances).map(([account, balance]) => `
         <div class="list-row">
-          <span>${escapeHtml(ACCOUNT_LABELS[account] || account)}</span>
+          <span>${escapeHtml(state.accountLabels[account] || account)}</span>
           <strong>${currency.format(balance)}</strong>
         </div>`), "No accounts");
+
+      const importSelect = document.querySelector("#import-account");
+      if (importSelect) {
+        const current = importSelect.value;
+        importSelect.innerHTML = state.accounts
+          .map(
+            (account) =>
+              `<option value="${escapeHtml(account.id)}">${escapeHtml(account.label)}</option>`
+          )
+          .join("");
+        if (current && state.accountLabels[current]) importSelect.value = current;
+      }
 
       const reviewCount = state.transactions.filter((tx) => tx.needsReview).length;
       document.querySelector("#review-count").textContent =
         reviewCount ? `${reviewCount} needs review` : "All reviewed";
     }
 
-    function updateReviewState(tx) {
-      tx.needsReview =
-        !tx.direction ||
-        (tx.direction === "transfer" && !tx.transferAccount) ||
-        (tx.direction !== "transfer" && !tx.category);
+    function actionId(prefix) {
+      const suffix = globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return `${prefix}:${suffix}`;
     }
 
-    document.querySelector("#transactions").addEventListener("change", (event) => {
+    function renderEmptyState(hasTransactions) {
+      const note = document.querySelector("#review-count");
+      if (hasTransactions) return;
+      note.textContent = "No transactions synced yet";
+      document.querySelector("#transactions").innerHTML =
+        `<tr><td colspan="7" class="empty">No transactions available from Shelf. ` +
+        `Sync a digest/snapshot, or open this app through the laptop hub.</td></tr>`;
+    }
+
+    async function refreshFromShelf() {
+      const [transactionsPayload, snapshotPayload, accountsPayload] = await Promise.all([
+        Shelf.data.get("transactions"),
+        Shelf.data.get("snapshot"),
+        Shelf.data.get("accounts").catch(() => null)
+      ]);
+      // Device contract: data.get('transactions') is a { transactions } field
+      // sourced from the encrypted digest/snapshot, or null. The laptop hub
+      // relay additionally exposes raw rows as the source of truth.
+      const rows =
+        transactionsPayload?.transactions ?? transactionsPayload?.rows ?? [];
+      state.asOfDate = transactionsPayload?.asOfDate || "2026-08-05";
+      state.transactions = rows.map((row) => ({ ...row }));
+      state.snapshot = snapshotPayload || null;
+
+      const accountList =
+        accountsPayload?.accounts ||
+        transactionsPayload?.accounts ||
+        [];
+      state.accounts = accountList;
+      state.accountLabels = Object.fromEntries(
+        accountList.map((account) => [account.id, account.label || account.id])
+      );
+      // Fall back so transfer targets still work if accounts endpoint is missing.
+      if (!Object.keys(state.accountLabels).length) {
+        Object.keys(snapshotPayload?.balances || {}).forEach((id) => {
+          state.accountLabels[id] = id;
+        });
+        state.transactions.forEach((tx) => {
+          state.accountLabels[tx.account] = state.accountLabels[tx.account] || tx.account;
+        });
+      }
+
+      if (transactionsPayload?.settings) {
+        monthlyIncomeInput.value = transactionsPayload.settings.monthlyIncome;
+        weeklyIncomeInput.value = Number(transactionsPayload.settings.weeklyIncome).toFixed(2);
+        weeklySavingsInput.value = transactionsPayload.settings.weeklySavingsTarget;
+      }
+
+      if (state.transactions.length) {
+        renderTable();
+      } else {
+        renderEmptyState(false);
+      }
+      renderSnapshot();
+    }
+
+    document.querySelector("#add-account")?.addEventListener("click", async () => {
+      if (!Shelf.accounts?.create) {
+        document.querySelector("#bridge-detail").textContent =
+          "Add account requires the laptop hub";
+        return;
+      }
+      const id = window.prompt("Account id (e.g. fidelity-brokerage)");
+      if (!id) return;
+      const label = window.prompt("Label", id) || id;
+      const type =
+        window.prompt("Type: cash | investment | liability | external", "cash") ||
+        "cash";
+      try {
+        await Shelf.accounts.create({ id, label, type, openingBalance: 0 });
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Add account failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#import-file")?.addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (!Shelf.import?.text) {
+        document.querySelector("#bridge-detail").textContent =
+          "Import requires the laptop hub";
+        return;
+      }
+      const accountId = document.querySelector("#import-account")?.value;
+      if (!accountId) {
+        document.querySelector("#bridge-detail").textContent = "Pick an account to import into";
+        return;
+      }
+      try {
+        const text = await file.text();
+        const result = await Shelf.import.text({ accountId, text, format: "auto" });
+        document.querySelector("#bridge-detail").textContent =
+          `Imported ${result.inserted} new · skipped ${result.skipped}`;
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Import failed: ${error.message || error}`;
+      } finally {
+        event.target.value = "";
+      }
+    });
+
+    document.querySelector("#transactions").addEventListener("change", async (event) => {
       const row = event.target.closest("tr");
       const tx = state.transactions.find((item) => item.id === row?.dataset.id);
       if (!tx) return;
@@ -514,12 +581,12 @@
         tx.direction = event.target.value;
         if (tx.direction === "transfer") {
           tx.category = "";
-          tx.transferAccount ||= tx.suggestedTransferAccount || "savings";
+          tx.transferAccount ||= tx.suggestedTransferAccount || Object.keys(state.accountLabels).find((id) => /savings/i.test(id)) || "";
         } else if (tx.direction === "in") {
           tx.category = "income";
           tx.transferAccount = "";
         } else if (tx.direction === "out") {
-          tx.category = MoneyRules.categoryFor(tx.merchant);
+          tx.category ||= "uncategorized";
           tx.transferAccount = "";
         } else {
           tx.category = "";
@@ -529,98 +596,71 @@
       if (event.target.classList.contains("category")) tx.category = event.target.value;
       if (event.target.classList.contains("target")) tx.transferAccount = event.target.value;
       updateReviewState(tx);
-      markDirty(tx);
       renderTable();
-      renderSnapshot();
+      try {
+        await Shelf.outbox.push({
+          id: actionId(`money-edit:${tx.id}`),
+          type: "action.transaction.update",
+          source: "money",
+          collectedAt: new Date().toISOString(),
+          data: {
+            id: tx.id,
+            direction: tx.direction,
+            category: tx.category,
+            transferAccount: tx.transferAccount
+          }
+        });
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Save failed: ${error.message || error}`;
+      }
     });
 
+    async function saveSettings() {
+      await Shelf.outbox.push({
+        id: actionId("money-settings"),
+        type: "action.settings.update",
+        source: "money",
+        collectedAt: new Date().toISOString(),
+        data: settings()
+      });
+      await refreshFromShelf();
+    }
+
     [weeklyIncomeInput, weeklySavingsInput].forEach((input) => {
-      input.addEventListener("input", renderSnapshot);
+      input.addEventListener("change", () => saveSettings().catch(console.error));
     });
     monthlyIncomeInput.addEventListener("input", () => {
       weeklyIncomeInput.value = ((Number(monthlyIncomeInput.value) || 0) / 4.345).toFixed(2);
-      renderSnapshot();
     });
-
-    commitBtn.addEventListener("click", async () => {
-      if (!state.dirtyIds.size) return;
-      const updates = state.transactions
-        .filter((tx) => state.dirtyIds.has(tx.id))
-        .map((tx) => ({
-          id: tx.id,
-          direction: tx.direction,
-          category: tx.category,
-          transferAccount: tx.transferAccount
-        }));
-
-      if (!state.hubMode) {
-        rememberBaseline(state.transactions);
-        document.querySelector("#footnote").textContent =
-          "Offline mode: draft accepted in memory only (no disk write).";
-        renderTable();
-        return;
-      }
-
-      commitBtn.disabled = true;
-      const response = await fetch("/api/commit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates, settings: settings() })
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        commitBtn.disabled = false;
-        alert(payload.error || "Commit failed");
-        return;
-      }
-      state.transactions = payload.transactions.map(cloneTx);
-      rememberBaseline(state.transactions);
-      renderTable();
-      renderSnapshot();
-      document.querySelector("#footnote").textContent =
-        `Committed ${payload.count} row(s) at ${payload.committedAt}`;
-    });
+    monthlyIncomeInput.addEventListener("change", () => saveSettings().catch(console.error));
 
     async function boot() {
-      let hubOk = false;
-      if (location.protocol.startsWith("http")) {
-        try {
-          const health = await fetch("/api/health");
-          hubOk = health.ok;
-        } catch (_error) {
-          hubOk = false;
-        }
+      if (!window.Shelf || typeof Shelf.data?.get !== "function") {
+        throw new Error("window.Shelf is missing");
       }
 
-      if (hubOk) {
-        state.hubMode = true;
-        const response = await fetch("/api/transactions");
-        const payload = await response.json();
-        state.transactions = payload.transactions.map(cloneTx);
-        if (payload.settings) {
-          monthlyIncomeInput.value = payload.settings.monthlyIncome;
-          weeklyIncomeInput.value = payload.settings.weeklyIncome;
-          weeklySavingsInput.value = payload.settings.weeklySavingsTarget;
-        }
-        document.querySelector("#mode-label").textContent = "Hub mode";
-        document.querySelector("#mode-detail").textContent = "Encrypted SQLite · commit to persist";
-        document.querySelector("#footnote").textContent =
-          "Drafts stay local until you click Commit. Secrets never enter the browser.";
-      } else {
-        state.hubMode = false;
-        state.transactions = MoneyRules.normalizeTransactions(SAMPLE_TRANSACTIONS);
-        document.querySelector("#mode-label").textContent = "Offline file mode";
-        document.querySelector("#mode-detail").textContent = "Memory only · no network required";
-        document.querySelector("#footnote").textContent =
-          "Open via the hub for encrypted persistence. File mode keeps edits in memory.";
-      }
+      await refreshFromShelf();
+      document.querySelector("#bridge-label").textContent = Shelf.__hub
+        ? "Shelf (hub relay)"
+        : Shelf.__real
+          ? "Shelf (device)"
+          : "Shelf (mock)";
+      document.querySelector("#bridge-detail").textContent = Shelf.__hub
+        ? "Localhost relay · SQLCipher source of truth"
+        : Shelf.__real
+          ? "Native bridge · no page network"
+          : "Local sample · no page network";
 
-      rememberBaseline(state.transactions);
-      renderTable();
-      renderSnapshot();
+      document.querySelector("#app").hidden = false;
     }
 
-    boot();
+    boot().catch((error) => {
+      const box = document.querySelector("#boot-error");
+      box.hidden = false;
+      box.textContent = `Money app failed to start: ${error.message || error}`;
+    });
   </script>
 </body>
 </html>

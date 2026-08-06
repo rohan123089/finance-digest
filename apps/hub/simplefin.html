@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SimpleFIN mapping</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(720px, 94vw); margin: 0 auto; padding: 28px 0 48px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    section {
+      border: 1px solid #283544;
+      border-radius: 12px;
+      background: #121922;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    label { display: block; color: #91a0ad; font-size: 12px; margin-bottom: 6px; }
+    input, select, button, textarea {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid #283544;
+      background: #18212c;
+      color: #edf3f8;
+      padding: 8px 10px;
+    }
+    textarea { width: 100%; min-height: 72px; box-sizing: border-box; }
+    button { cursor: pointer; }
+    button.primary {
+      background: #5ee0a0;
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-top: 10px; }
+    .meta { color: #91a0ad; font-size: 12px; margin-top: 10px; }
+    .error { color: #ff7b7b; }
+    .ok { color: #5ee0a0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #283544; font-size: 13px; }
+    th { color: #91a0ad; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SimpleFIN</h1>
+    <p class="sub">Claim a setup token, map remote bank accounts to local Money accounts, then sync. Laptop-only.</p>
+
+    <section>
+      <label for="token">Setup token (one-time)</label>
+      <textarea id="token" placeholder="Paste setup token from beta-bridge.simplefin.org"></textarea>
+      <div class="row">
+        <button class="primary" id="claim">Claim access URL</button>
+      </div>
+      <div class="meta" id="claim-status"></div>
+    </section>
+
+    <section>
+      <div class="row">
+        <button id="refresh">Refresh remote accounts</button>
+        <button class="primary" id="sync">Sync transactions</button>
+      </div>
+      <div class="meta" id="sync-status"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Remote</th>
+            <th>Balance</th>
+            <th>Local account</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Request failed");
+      return payload;
+    }
+
+    function optionList(local, selected) {
+      return [
+        `<option value="">— not linked —</option>`,
+        ...local.map(
+          (account) =>
+            `<option value="${account.id}" ${account.id === selected ? "selected" : ""}>${account.label} (${account.id})</option>`
+        )
+      ].join("");
+    }
+
+    async function refresh() {
+      const status = document.querySelector("#sync-status");
+      const tbody = document.querySelector("#rows");
+      status.textContent = "Loading…";
+      status.className = "meta";
+      try {
+        const payload = await api("/api/simplefin/remote");
+        if (!payload.configured) {
+          status.textContent = "No access URL yet — claim a setup token first.";
+          tbody.innerHTML = "";
+          return;
+        }
+        status.textContent = `${payload.accounts.length} remote account(s)`;
+        tbody.innerHTML = payload.accounts
+          .map((account) => {
+            const bal = Number.isFinite(account.balance)
+              ? account.balance.toFixed(2)
+              : "—";
+            return `<tr data-sf="${account.id}">
+              <td>${account.name}<div class="meta">${account.org || account.id}</div></td>
+              <td>${bal}</td>
+              <td><select class="local">${optionList(payload.local, account.linkedAccountId)}</select></td>
+              <td><button class="link">Save link</button></td>
+            </tr>`;
+          })
+          .join("");
+      } catch (error) {
+        status.textContent = error.message || error;
+        status.className = "meta error";
+      }
+    }
+
+    document.querySelector("#claim").addEventListener("click", async () => {
+      const status = document.querySelector("#claim-status");
+      status.textContent = "Claiming…";
+      status.className = "meta";
+      try {
+        await api("/api/simplefin/claim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ setupToken: document.querySelector("#token").value })
+        });
+        document.querySelector("#token").value = "";
+        status.textContent = "Access URL stored in the OS keychain.";
+        status.className = "meta ok";
+        await refresh();
+      } catch (error) {
+        status.textContent = error.message || error;
+        status.className = "meta error";
+      }
+    });
+
+    document.querySelector("#refresh").addEventListener("click", () => refresh());
+
+    document.querySelector("#sync").addEventListener("click", async () => {
+      const status = document.querySelector("#sync-status");
+      status.textContent = "Syncing…";
+      status.className = "meta";
+      try {
+        const result = await api("/api/simplefin/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        status.textContent = `Synced (${result.mode}): inserted ${result.inserted}, unmapped ${result.unmapped?.length || 0}`;
+        status.className = "meta ok";
+        await refresh();
+      } catch (error) {
+        status.textContent = error.message || error;
+        status.className = "meta error";
+      }
+    });
+
+    document.querySelector("#rows").addEventListener("click", async (event) => {
+      if (!event.target.classList.contains("link")) return;
+      const row = event.target.closest("tr");
+      const simplefinAccountId = row.getAttribute("data-sf");
+      const accountId = row.querySelector(".local").value;
+      const status = document.querySelector("#sync-status");
+      if (!accountId) {
+        status.textContent = "Pick a local account first.";
+        status.className = "meta error";
+        return;
+      }
+      try {
+        await api("/api/simplefin/map", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accountId, simplefinAccountId })
+        });
+        status.textContent = `Linked ${simplefinAccountId} → ${accountId}`;
+        status.className = "meta ok";
+        await refresh();
+      } catch (error) {
+        status.textContent = error.message || error;
+        status.className = "meta error";
+      }
+    });
+
+    refresh();
+  </script>
+</body>
+</html>

@@ -2,11 +2,13 @@
 
 const crypto = require("node:crypto");
 const dbApi = require("./db.js");
+const secretStore = require("./secret-store.js");
+const Net = require("./net.js");
 
 const MODES = new Set(["OFF", "LOCAL", "CLOUD"]);
 
 function getAiMode(db) {
-  return String(dbApi.getMeta(db, "aiMode", process.env.HUB_AI_MODE || "OFF")).toUpperCase();
+  return String(dbApi.getMeta(db, "aiMode", "OFF")).toUpperCase();
 }
 
 function setAiMode(db, mode) {
@@ -16,6 +18,45 @@ function setAiMode(db, mode) {
   }
   dbApi.setMeta(db, "aiMode", normalized);
   return normalized;
+}
+
+/**
+ * Contract-shaped redacted snapshot only. No balances, expenses, merchants,
+ * account ids, or raw transactions — this is the sole AI input.
+ */
+function snapshotForAi(db) {
+  const full = dbApi.redactSnapshot(dbApi.computeLiveSnapshot(db));
+  const redacted = {
+    netWorth: full.netWorth,
+    liquid: full.liquid,
+    invested: full.invested,
+    savingsRatePct: full.savingsRatePct,
+    recurringMonthly: full.recurringMonthly,
+    runwayMonths: full.runwayMonths,
+    owed: full.owed,
+    safeToSpend: {
+      period: full.safeToSpend.period,
+      amount: full.safeToSpend.amount,
+      spent: full.safeToSpend.spent,
+      remaining: full.safeToSpend.remaining
+    },
+    flags: []
+  };
+  assertSafeForAi(redacted);
+  return redacted;
+}
+
+function assertSafeForAi(redacted) {
+  const serialized = JSON.stringify(redacted);
+  if ("transactions" in redacted) {
+    throw new Error("Refusing AI call: redacted snapshot leaked transactions");
+  }
+  if ("balances" in redacted || "expenses" in redacted || "spendingByCategory" in redacted) {
+    throw new Error("Refusing AI call: redacted snapshot leaked account detail");
+  }
+  if (/rawMerchant|accountNumber|token|password/i.test(serialized)) {
+    throw new Error("Refusing AI call: redacted snapshot looks secret-bearing");
+  }
 }
 
 function localHeuristics(redacted) {
@@ -36,7 +77,7 @@ function localHeuristics(redacted) {
       id: "flag-owed",
       trigger: "owed",
       why: "External card balance is outstanding",
-      action: "Reimburse parents'-card balance",
+      action: "Reimburse outside payments balance",
       value: redacted.owed,
       deadline: null,
       confidence: 0.85
@@ -61,17 +102,41 @@ function localHeuristics(redacted) {
 }
 
 async function cloudHeuristics(redacted) {
-  // Cloud path is gated and must never receive raw transactions.
-  // Without an API key, fall back to the same deterministic local rules.
-  if (!process.env.HUB_AI_CLOUD_KEY) {
+  assertSafeForAi(redacted);
+  const apiKey = await secretStore.getConnectorSecret("ai.cloudKey");
+  if (!apiKey) {
     const local = localHeuristics(redacted);
     return {
       ...local,
-      summary: `Cloud mode without key; used local rules (${local.flags.length} nudges)`
+      summary: `CLOUD without key; local rules (${local.flags.length} nudges)`,
+      mutations: []
     };
   }
-  // Placeholder for a future provider call that receives ONLY redacted.
-  return localHeuristics(redacted);
+
+  try {
+    const completion = await Net.call("ai", { redacted });
+    const content = completion?.choices?.[0]?.message?.content || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (_error) {
+      throw new Error("CLOUD AI returned non-JSON content");
+    }
+    const flags = Array.isArray(parsed.flags) ? parsed.flags : [];
+    return {
+      summary: String(parsed.summary || `CLOUD model returned ${flags.length} nudge(s)`),
+      flags,
+      // Hard rule: discard any model-suggested mutations.
+      mutations: []
+    };
+  } catch (error) {
+    const local = localHeuristics(redacted);
+    return {
+      ...local,
+      summary: `CLOUD failed (${error.message}); local rules (${local.flags.length} nudges)`,
+      mutations: []
+    };
+  }
 }
 
 async function propose(db) {
@@ -80,18 +145,19 @@ async function propose(db) {
     return {
       mode,
       proposal: null,
-      message: "AI is OFF"
+      message: "AI is OFF",
+      mutatesRecords: false
     };
   }
 
-  const redacted = dbApi.redactSnapshot(dbApi.computeLiveSnapshot(db));
-  // Hard guarantee: never attach raw transactions to the AI payload.
-  if ("transactions" in redacted) {
-    throw new Error("Refusing AI call: redacted snapshot leaked transactions");
-  }
-
+  const beforeTx = dbApi.listTransactions(db).length;
+  const redacted = snapshotForAi(db);
   const body =
     mode === "CLOUD" ? await cloudHeuristics(redacted) : localHeuristics(redacted);
+
+  if (!Array.isArray(body.mutations) || body.mutations.length !== 0) {
+    throw new Error("Refusing AI proposal that includes mutations");
+  }
 
   const proposal = {
     id: `ai-${crypto.randomBytes(4).toString("hex")}`,
@@ -102,6 +168,11 @@ async function propose(db) {
   };
   dbApi.saveAiProposal(db, proposal);
 
+  const afterTx = dbApi.listTransactions(db).length;
+  if (afterTx !== beforeTx) {
+    throw new Error("AI propose mutated transaction rows");
+  }
+
   return {
     mode,
     input: redacted,
@@ -110,7 +181,6 @@ async function propose(db) {
       createdAt: proposal.createdAt,
       ...body
     },
-    // Explicit: AI never mutates records; user must commit separately.
     mutatesRecords: false
   };
 }
@@ -120,5 +190,7 @@ module.exports = {
   getAiMode,
   setAiMode,
   propose,
-  localHeuristics
+  localHeuristics,
+  snapshotForAi,
+  assertSafeForAi
 };
