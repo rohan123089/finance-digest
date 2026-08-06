@@ -1,38 +1,35 @@
-# Phone / Shelf — one HTML file
+# Shelf app — one HTML file, no hub required
 
-Repo: https://github.com/rohan123089/finance-digest
+## File
 
-## The only file you need
+`apps/shelf/shelf.html`
 
-```text
-apps/shelf/shelf.html
-```
+Download that **one** file. Open it in a browser or point Shelf at it.
 
-That **one** file is Money + Digest (tabs). Everything else is optional.
+It runs **offline** with sample money data + bills + digest. Edits save in the
+browser (`localStorage`). The laptop hub is optional.
 
-### Option A — open from the laptop hub (easiest)
+## Open offline (no `npm start`)
 
-1. Laptop: `npm start`
-2. Same Wi‑Fi, in Shelf open:
+1. Get `apps/shelf/shelf.html` (GitHub ZIP or copy from this repo).
+2. Open the file (double-click, or Shelf → load file).
+3. Use **Money** and **Digest** tabs.
 
-```text
+## Optional: connect to hub later
+
+If you later open the same file from the hub URL while `npm start` is running:
+
+http://127.0.0.1:8787/apps/shelf/shelf.html
+
+…it will use live hub data instead. Phone on Wi‑Fi:
+
 http://YOUR_LAPTOP_IP:8787/apps/shelf/shelf.html
-```
 
-### Option B — download one file
+## Pairing / sync / bank import
 
-1. Open the repo on GitHub (phone browser, logged in if private).
-2. Go to `apps/shelf/shelf.html` → raw / download that file only.
-3. Or **Code → Download ZIP**, then keep only `apps/shelf/shelf.html`.
-4. Point Shelf at that file.
+Those still need the hub. Day-to-day Money + Digest + rent reminders do not.
 
-You do **not** need `home.html`, `money.html`, `digest.html`, or separate JS files.
-
-### Pairing (once, on the laptop)
-
-http://127.0.0.1:8787/apps/hub/pairing.html — scan with Shelf so sync works.
-
-Rebuild the one-file app after editing sources:
+Rebuild after changing sources:
 
 ```powershell
 npm run build:shelf

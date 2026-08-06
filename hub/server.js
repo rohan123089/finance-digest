@@ -78,11 +78,21 @@ function safeJoin(root, requestPath) {
 }
 
 function serveStatic(req, res, urlPath) {
-  // Never rewrite "/" in-place: relative script URLs in money.html would resolve
-  // from "/" and 404 (/shelf/... instead of /apps/shelf/...). Redirect instead.
-  if (urlPath === "/") {
+  // Never rewrite "/" in-place: relative script URLs would resolve from "/" and 404.
+  // Also accept a few short aliases people type from the docs.
+  const aliases = {
+    "/": "/apps/shelf/shelf.html",
+    "/shelf": "/apps/shelf/shelf.html",
+    "/shelf.html": "/apps/shelf/shelf.html",
+    "/shelf/shelf.html": "/apps/shelf/shelf.html",
+    "/apps/shelf": "/apps/shelf/shelf.html",
+    "/apps/shelf/": "/apps/shelf/shelf.html",
+    "/home": "/apps/shelf/shelf.html",
+    "/apps/hub/home.html": "/apps/shelf/shelf.html"
+  };
+  if (aliases[urlPath]) {
     res.writeHead(302, {
-      Location: "/apps/shelf/shelf.html",
+      Location: aliases[urlPath],
       "Cache-Control": "no-store"
     });
     res.end();
@@ -104,7 +114,7 @@ function serveStatic(req, res, urlPath) {
     !fs.existsSync(filePath) ||
     fs.statSync(filePath).isDirectory()
   ) {
-    sendJson(res, 404, { error: "Not found" });
+    sendJson(res, 404, { error: "Not found", path: urlPath, try: "/apps/shelf/shelf.html" });
     return;
   }
   const ext = path.extname(filePath).toLowerCase();

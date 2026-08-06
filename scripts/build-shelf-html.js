@@ -19,6 +19,7 @@ const hubShelf = read("apps/shelf/hub-shelf.js");
 const mockShelf = read("apps/shelf/mock-shelf.js");
 const rules = read("engine/rules.js");
 const model = read("engine/model.js");
+const bills = read("engine/bills.js");
 
 const html = `<!doctype html>
 <html lang="en">
@@ -187,16 +188,19 @@ const html = `<!doctype html>
   </div>
 
   <script>
-${hubShelf}
+${rules}
+  </script>
+  <script>
+${model}
+  </script>
+  <script>
+${bills}
   </script>
   <script>
 ${mockShelf}
   </script>
   <script>
-${rules}
-  </script>
-  <script>
-${model}
+${hubShelf}
   </script>
   <script>
   "use strict";
@@ -469,18 +473,30 @@ ${model}
     }
   });
 
+  function setBridgeLabel() {
+    document.querySelector("#bridge").textContent = Shelf.__hub
+      ? "Connected to laptop hub"
+      : Shelf.__standalone || Shelf.__mock
+        ? "Offline · works without hub (saved in this browser)"
+        : Shelf.__real
+          ? "Device Shelf"
+          : "Shelf";
+  }
+
   async function boot() {
     if (!window.Shelf || typeof Shelf.data?.get !== "function") {
-      throw new Error("window.Shelf is missing — open this file in Shelf or via the hub");
+      throw new Error("window.Shelf is missing");
     }
-    document.querySelector("#bridge").textContent = Shelf.__hub
-      ? "Hub relay · Money + Digest in one page"
-      : Shelf.__real
-        ? "Device Shelf · Money + Digest in one page"
-        : "Mock Shelf · preview only";
+    setBridgeLabel();
     await refreshMoney();
     await loadDigest();
   }
+
+  window.addEventListener("shelf-hub-ready", () => {
+    setBridgeLabel();
+    refreshMoney().catch(() => {});
+    loadDigest().catch(() => {});
+  });
 
   boot().catch((error) => {
     const box = document.querySelector("#boot-error");

@@ -17,8 +17,9 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:8787/> — one Shelf app (**Money** + **Digest** tabs).
-Phone setup: [`PHONE.md`](PHONE.md) (download only `apps/shelf/shelf.html`).
+Open <http://127.0.0.1:8787/> when the hub is running, **or** just open
+`apps/shelf/shelf.html` as a file — it works offline (no hub). Phone setup:
+[`PHONE.md`](PHONE.md).
 The first launch creates the encrypted database, seeds starter accounts (UWCU
 checking/savings, Amex, Discover, Vanguard, outside payments) with **no sample
 transactions**, and stores a random database key in the OS keychain. To load the

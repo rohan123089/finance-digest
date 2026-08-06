@@ -1,15 +1,15 @@
 /**
- * mock-shelf.js — browser shim for window.Shelf
+ * mock-shelf.js — offline Shelf (no hub required)
  *
- * Installs only when a real Shelf bridge is absent. Shape matches the real
- * Android WebView contract so app HTML stays identical in both environments.
- * No fetch, no network, no credentials — sample data is embedded.
+ * Installs when a real native Shelf bridge is absent. Persists to localStorage
+ * so downloading shelf.html and opening it (file:// or any browser) works alone.
+ * Hub is optional: hub-shelf.js may upgrade this when /api/health is reachable.
  */
 (function (root) {
   "use strict";
 
-  if (root.Shelf && root.Shelf.__real) return;
-  if (root.Shelf && root.Shelf.__mock) return;
+  if (root.Shelf && root.Shelf.__real && !root.Shelf.__mock) return;
+  if (root.Shelf && root.Shelf.__mock && root.Shelf.__standalone) return;
 
   function shelfError(code, message) {
     const err = new Error(message);
@@ -26,9 +26,8 @@
     return Promise.reject(shelfError(code, message));
   }
 
-  // Sample covers: income, ordinary expenses, checking→savings, Vanguard buy
-  // (transfer), ambiguous Venmo (needsReview), outside-payments external expense,
-  // reimbursement transfer, and recurring Netflix/Spotify.
+  const STORE_KEY = "shelf-offline-v1";
+
   const SAMPLE_TRANSACTIONS = [
     { id: "tx-001", date: "2026-06-01", rawMerchant: "ACME PAYROLL 0601", amount: 5200, account: "checking" },
     { id: "tx-002", date: "2026-06-02", rawMerchant: "JUNE RENT", amount: 1650, account: "checking" },
@@ -57,98 +56,355 @@
     { id: "tx-025", date: "2026-08-05", rawMerchant: "LANDMARK CINEMA", amount: 18.5, account: "checking" }
   ];
 
+  const DEFAULT_BILLS = [
+    {
+      id: "bill:rent",
+      title: "Rent",
+      amount: 1650,
+      dueDay: 1,
+      leadDays: 5,
+      category: "housing",
+      active: true,
+      lastPaidFor: null,
+      notes: ""
+    },
+    {
+      id: "bill:utilities",
+      title: "Utilities",
+      amount: 120,
+      dueDay: 15,
+      leadDays: 3,
+      category: "utilities",
+      active: true,
+      lastPaidFor: null,
+      notes: ""
+    }
+  ];
+
+  const DEFAULT_ACCOUNTS = [
+    { id: "checking", label: "Checking", type: "cash", openingBalance: 6200, simplefinAccountId: null },
+    { id: "savings", label: "Savings", type: "cash", openingBalance: 12000, simplefinAccountId: null },
+    { id: "vanguard", label: "Vanguard", type: "investment", openingBalance: 28000, simplefinAccountId: null },
+    { id: "outside-payments", label: "Outside payments", type: "external", openingBalance: 0, simplefinAccountId: null }
+  ];
+
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function defaultState() {
+    return {
+      transactions: SAMPLE_TRANSACTIONS.map((row) => ({ ...row })),
+      overrides: {},
+      settings: {
+        asOfDate: todayIso(),
+        weeklySavingsTarget: 300,
+        monthlyIncome: 5200,
+        weeklyIncome: 1200,
+        openingBalances: {
+          checking: 6200,
+          savings: 12000,
+          vanguard: 28000,
+          "outside-payments": 0
+        },
+        accountTypes: {
+          checking: "cash",
+          savings: "cash",
+          vanguard: "investment",
+          "outside-payments": "external"
+        }
+      },
+      bills: DEFAULT_BILLS.map((b) => ({ ...b })),
+      accounts: DEFAULT_ACCOUNTS.map((a) => ({ ...a })),
+      watching: [],
+      reading: [
+        {
+          id: "read:demo",
+          title: "Offline Shelf works without the hub",
+          url: "#offline",
+          source: "demo",
+          rank: 1
+        }
+      ],
+      junk: [],
+      outbox: []
+    };
+  }
+
+  function loadState() {
+    try {
+      const raw = root.localStorage?.getItem(STORE_KEY);
+      if (!raw) return defaultState();
+      const parsed = JSON.parse(raw);
+      const base = defaultState();
+      return {
+        ...base,
+        ...parsed,
+        settings: { ...base.settings, ...(parsed.settings || {}) },
+        bills: Array.isArray(parsed.bills) ? parsed.bills : base.bills,
+        accounts: Array.isArray(parsed.accounts) ? parsed.accounts : base.accounts,
+        transactions: Array.isArray(parsed.transactions)
+          ? parsed.transactions
+          : base.transactions,
+        overrides: parsed.overrides || {},
+        watching: parsed.watching || [],
+        reading: parsed.reading || base.reading,
+        junk: parsed.junk || [],
+        outbox: parsed.outbox || []
+      };
+    } catch (_error) {
+      return defaultState();
+    }
+  }
+
+  function saveState() {
+    try {
+      root.localStorage?.setItem(STORE_KEY, JSON.stringify(state));
+    } catch (_error) {
+      // private mode / quota — keep in-memory
+    }
+  }
+
+  let state = loadState();
   const memoryFs = Object.create(null);
-  const outbox = [];
-  const transactionOverrides = Object.create(null);
-  const mockSettings = {
-    asOfDate: "2026-08-05",
-    monthlyIncome: 5200,
-    weeklyIncome: 5200 / 4.345,
-    weeklySavingsTarget: 300
-  };
-  // Stands in for the transactions the encrypted digest/snapshot would carry
-  // down to the device. Set to null to exercise the "no synced data" path.
-  const syncedSnapshot = { transactions: SAMPLE_TRANSACTIONS };
   const shareListeners = [];
   const appUrlListeners = [];
   let imageSeq = 0;
+  let aiMode = "LOCAL";
+
+  function liveTransactions() {
+    const rows = state.transactions.map((row) => ({
+      ...row,
+      ...(state.overrides[row.id] || {})
+    }));
+    return root.MoneyRules
+      ? root.MoneyRules.normalizeTransactions(rows)
+      : rows;
+  }
+
+  function buildSnapshot() {
+    if (!root.MoneyRules || !root.MoneyModel) {
+      throw shelfError("NOT_READY", "Money engine has not loaded");
+    }
+    const snapshot = root.MoneyModel.computeSnapshot(liveTransactions(), state.settings);
+    return {
+      kind: "snapshot",
+      netWorth: snapshot.netWorth,
+      liquid: snapshot.liquid,
+      invested: snapshot.invested,
+      savingsRatePct: Math.round(snapshot.savingsRate * 1000) / 10,
+      recurringMonthly: snapshot.recurringMonthly,
+      runwayMonths: Math.round(snapshot.runwayMonths * 10) / 10,
+      owed: snapshot.owed,
+      expenses: snapshot.expenses,
+      expensesThisMonth: snapshot.expensesThisMonth,
+      spendingMonth: snapshot.spendingMonth,
+      spendingByCategory: snapshot.spendingByCategory,
+      recurring: snapshot.recurring,
+      balances: snapshot.balances,
+      safeToSpend: {
+        period: snapshot.safeToSpend.period,
+        periodSource: snapshot.safeToSpend.periodSource,
+        nextPayday: snapshot.safeToSpend.nextPayday,
+        horizonDays: snapshot.safeToSpend.horizonDays,
+        amount: snapshot.safeToSpend.remaining,
+        income: snapshot.safeToSpend.income,
+        weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+        committed: snapshot.safeToSpend.committed,
+        commitments: snapshot.safeToSpend.commitments,
+        savingsTarget: snapshot.safeToSpend.savingsTarget,
+        spent: snapshot.safeToSpend.spent,
+        remaining: snapshot.safeToSpend.remaining
+      },
+      flags: []
+    };
+  }
+
+  function buildDigest() {
+    const asOf = state.settings.asOfDate || todayIso();
+    const today = [];
+    const billsApi = root.LifeBills;
+    if (billsApi) {
+      billsApi.upcomingReminders(state.bills, asOf).forEach((row) => {
+        const id = `bill:${row.bill.id.replace(/^bill:/, "")}:${row.periodKey}`;
+        today.push({
+          kind: "bill",
+          id,
+          title: billsApi.reminderTitle(row),
+          dueAt: row.dueAt,
+          start: row.dueAt,
+          domain: "personal",
+          amount: row.bill.amount,
+          daysUntil: row.daysUntil,
+          overdue: row.overdue,
+          actions: [
+            {
+              type: "bill.paid",
+              targetRef: {
+                itemId: id,
+                billId: row.bill.id,
+                periodKey: row.periodKey
+              }
+            },
+            {
+              type: "dismiss",
+              targetRef: {
+                itemId: id,
+                billId: row.bill.id,
+                periodKey: row.periodKey
+              }
+            }
+          ]
+        });
+      });
+    }
+    const snap = (() => {
+      try {
+        return buildSnapshot();
+      } catch (_e) {
+        return null;
+      }
+    })();
+    if (snap?.owed > 0) {
+      today.push({
+        kind: "task",
+        id: "task:owed",
+        title: `Reimburse outside payments · $${Number(snap.owed).toFixed(2)}`,
+        actions: [{ type: "ack", targetRef: { itemId: "task:owed", reason: "owed" } }]
+      });
+    }
+    return {
+      kind: "digest",
+      v: 1,
+      generatedAt: new Date().toISOString(),
+      asOfDate: asOf,
+      today,
+      watching: state.watching || [],
+      reading: state.reading || [],
+      junk: state.junk || []
+    };
+  }
+
+  function applyOutboxItem(item) {
+    if (!item?.type) return;
+    if (item.type === "action.transaction.update" && item.data?.id) {
+      state.overrides[item.data.id] = { ...item.data };
+      return;
+    }
+    if (item.type === "action.settings.update" && item.data) {
+      Object.assign(state.settings, item.data);
+      return;
+    }
+    if (item.type === "action.bills.upsert" && item.data) {
+      const bill = {
+        id: item.data.id,
+        title: item.data.title,
+        amount: Number(item.data.amount) || 0,
+        dueDay: Number(item.data.dueDay) || 1,
+        leadDays: Number(item.data.leadDays != null ? item.data.leadDays : 3),
+        category: item.data.category || "",
+        active: item.data.active !== false,
+        lastPaidFor: item.data.lastPaidFor || null,
+        notes: item.data.notes || ""
+      };
+      const idx = state.bills.findIndex((b) => b.id === bill.id);
+      if (idx >= 0) state.bills[idx] = { ...state.bills[idx], ...bill };
+      else state.bills.push(bill);
+      return;
+    }
+    if (item.type === "action.bills.delete" && item.data?.id) {
+      state.bills = state.bills.filter((b) => b.id !== item.data.id);
+      return;
+    }
+    if (
+      (item.type === "action.bill.paid" || item.type === "action.bill.pay") &&
+      item.data
+    ) {
+      const ref = item.data.targetRef || item.data;
+      const billId = ref.billId;
+      const period = ref.periodKey;
+      if (billId) {
+        const bill = state.bills.find((b) => b.id === billId);
+        if (bill) bill.lastPaidFor = period || bill.lastPaidFor;
+      }
+      return;
+    }
+    if (item.type === "action.dismiss" && item.data?.targetRef?.billId) {
+      const bill = state.bills.find((b) => b.id === item.data.targetRef.billId);
+      if (bill) {
+        bill.lastPaidFor =
+          item.data.targetRef.periodKey || bill.lastPaidFor;
+      }
+      return;
+    }
+    if (
+      (item.type === "action.rsvp.no" || item.type === "action.dismiss") &&
+      item.data?.targetRef?.itemId
+    ) {
+      const id = item.data.targetRef.itemId;
+      const fromToday = (buildDigest().today || []).find((row) => row.id === id);
+      if (fromToday && fromToday.kind === "event") {
+        state.watching = state.watching.filter((w) => w.id !== id);
+        state.watching.push({
+          ...fromToday,
+          status: "declined"
+        });
+      }
+    }
+  }
 
   const Shelf = {
     __mock: true,
+    __standalone: true,
     __version: 1,
 
     data: {
-      get(kind, opts) {
-        void opts;
+      get(kind) {
         if (kind === "transactions") {
-          // Device contract: transactions are only whatever the encrypted
-          // digest/snapshot supplied. With no synced snapshot the value is null.
-          if (!syncedSnapshot) return ok(null);
-          const transactions = (root.MoneyRules
-            ? root.MoneyRules.normalizeTransactions(syncedSnapshot.transactions)
-            : syncedSnapshot.transactions
-          ).map((row) => ({ ...row, ...(transactionOverrides[row.id] || {}) }));
           return ok({
             kind: "transactions",
-            transactions,
-            asOfDate: mockSettings.asOfDate,
+            transactions: liveTransactions(),
+            asOfDate: state.settings.asOfDate,
             settings: {
-              monthlyIncome: mockSettings.monthlyIncome,
-              weeklyIncome: mockSettings.weeklyIncome,
-              weeklySavingsTarget: mockSettings.weeklySavingsTarget
-            }
-          });
-        }
-        if (kind === "digest") {
-          return ok({ kind: "digest", today: [], reading: [], junk: [] });
-        }
-        if (kind === "snapshot") {
-          if (!syncedSnapshot) return ok(null);
-          if (!root.MoneyRules || !root.MoneyModel) {
-            return fail("NOT_READY", "Money engine has not loaded");
-          }
-          const snapshot = root.MoneyModel.computeSnapshot(
-            root.MoneyRules.normalizeTransactions(syncedSnapshot.transactions).map((row) => ({
-              ...row,
-              ...(transactionOverrides[row.id] || {})
-            })),
-            mockSettings
-          );
-          return ok({
-            kind: "snapshot",
-            netWorth: snapshot.netWorth,
-            liquid: snapshot.liquid,
-            invested: snapshot.invested,
-            savingsRatePct: Math.round(snapshot.savingsRate * 1000) / 10,
-            recurringMonthly: snapshot.recurringMonthly,
-            runwayMonths: Math.round(snapshot.runwayMonths * 10) / 10,
-            owed: snapshot.owed,
-            expenses: snapshot.expenses,
-            spendingByCategory: snapshot.spendingByCategory,
-            recurring: snapshot.recurring,
-            balances: snapshot.balances,
-            safeToSpend: {
-              period: snapshot.safeToSpend.period,
-              amount: snapshot.safeToSpend.remaining,
-              weeklyIncome: snapshot.safeToSpend.weeklyIncome,
-              committed: snapshot.safeToSpend.committed,
-              savingsTarget: snapshot.safeToSpend.savingsTarget,
-              spent: snapshot.safeToSpend.spent,
-              remaining: snapshot.safeToSpend.remaining
+              monthlyIncome: state.settings.monthlyIncome,
+              weeklyIncome: state.settings.weeklyIncome,
+              weeklySavingsTarget: state.settings.weeklySavingsTarget
             },
-            flags: []
+            accounts: state.accounts
           });
+        }
+        if (kind === "digest") return ok(buildDigest());
+        if (kind === "snapshot") {
+          try {
+            return ok(buildSnapshot());
+          } catch (error) {
+            return Promise.reject(error);
+          }
         }
         if (kind === "accounts") {
-          return ok({
-            kind: "accounts",
-            accounts: [
-              { id: "checking", label: "Checking", type: "cash", openingBalance: 6200, simplefinAccountId: null },
-              { id: "savings", label: "Savings", type: "cash", openingBalance: 12000, simplefinAccountId: null },
-              { id: "vanguard", label: "Vanguard", type: "investment", openingBalance: 28000, simplefinAccountId: null },
-              { id: "outside-payments", label: "Outside payments", type: "external", openingBalance: 0, simplefinAccountId: null }
-            ]
-          });
+          return ok({ kind: "accounts", accounts: state.accounts.slice() });
+        }
+        if (kind === "bills") {
+          const asOf = state.settings.asOfDate || todayIso();
+          const upcoming = root.LifeBills
+            ? root.LifeBills.upcomingReminders(state.bills, asOf, { includeAll: true }).map(
+                (row) => ({
+                  billId: row.bill.id,
+                  title: row.bill.title,
+                  amount: row.bill.amount,
+                  dueAt: row.dueAt,
+                  periodKey: row.periodKey,
+                  daysUntil: row.daysUntil,
+                  overdue: row.overdue,
+                  remind: row.remind,
+                  label: root.LifeBills.reminderTitle(row)
+                })
+              )
+            : [];
+          return ok({ kind: "bills", bills: state.bills.slice(), upcoming });
+        }
+        if (kind === "rewards") {
+          return Shelf.rewards.get();
         }
         return fail("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
       }
@@ -156,33 +412,124 @@
 
     accounts: {
       list() {
-        return Shelf.data.get("accounts").then((payload) => payload.accounts || []);
+        return ok(state.accounts.slice());
       },
-      create() {
-        return fail("HUB_ONLY", "Creating accounts requires the laptop hub");
+      create(account) {
+        if (!account?.id) return fail("BAD_ACCOUNT", "id required");
+        const row = {
+          id: String(account.id),
+          label: account.label || account.id,
+          type: account.type || "cash",
+          openingBalance: Number(account.openingBalance) || 0,
+          simplefinAccountId: null
+        };
+        state.accounts.push(row);
+        state.settings.accountTypes[row.id] = row.type;
+        state.settings.openingBalances[row.id] = row.openingBalance;
+        saveState();
+        return ok({ ok: true, account: row });
       },
-      update() {
-        return fail("HUB_ONLY", "Updating accounts requires the laptop hub");
+      update(id, patch) {
+        const row = state.accounts.find((a) => a.id === id);
+        if (!row) return fail("NOT_FOUND", "Account not found");
+        Object.assign(row, patch || {});
+        saveState();
+        return ok({ ok: true, account: row });
+      }
+    },
+
+    bills: {
+      list() {
+        return Shelf.data.get("bills");
+      },
+      create(bill) {
+        const id =
+          bill.id ||
+          `bill:${String(bill.title || "bill")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")}`;
+        applyOutboxItem({
+          type: "action.bills.upsert",
+          data: { ...bill, id, active: bill.active !== false }
+        });
+        saveState();
+        return ok({ ok: true, bill: state.bills.find((b) => b.id === id) });
+      },
+      update(id, patch) {
+        const existing = state.bills.find((b) => b.id === id);
+        if (!existing) return fail("NOT_FOUND", "Bill not found");
+        if (patch?.paid === true || patch?.markPaid === true) {
+          const asOf = state.settings.asOfDate || todayIso();
+          const next = root.LifeBills
+            ? root.LifeBills.nextDueForBill(existing, asOf)
+            : { periodKey: asOf.slice(0, 7) };
+          existing.lastPaidFor = patch.periodKey || next.periodKey;
+          saveState();
+          return ok({ ok: true, bill: existing });
+        }
+        applyOutboxItem({
+          type: "action.bills.upsert",
+          data: { ...existing, ...patch, id }
+        });
+        saveState();
+        return ok({ ok: true, bill: state.bills.find((b) => b.id === id) });
+      },
+      remove(id) {
+        applyOutboxItem({ type: "action.bills.delete", data: { id } });
+        saveState();
+        return ok({ ok: true });
       }
     },
 
     import: {
       text() {
-        return fail("HUB_ONLY", "Import requires the laptop hub");
+        return fail(
+          "OFFLINE",
+          "CSV import needs the laptop hub — offline mode uses sample / edited data"
+        );
+      },
+      list() {
+        return ok({ kind: "imports", batches: [] });
+      },
+      undo() {
+        return fail("OFFLINE", "Undo import requires the laptop hub");
+      }
+    },
+
+    rewards: {
+      get() {
+        return ok({
+          kind: "rewards",
+          pointers: [],
+          activeOffers: [],
+          byCategory: [],
+          totals: { spend: 0, actualEarn: 0, bestEarn: 0, missedUsd: 0 },
+          rules: [],
+          offers: []
+        });
+      },
+      optimize() {
+        return Shelf.rewards.get();
+      },
+      refresh() {
+        return fail("OFFLINE", "Rewards refresh requires the laptop hub");
+      },
+      saveOffer() {
+        return fail("OFFLINE", "Saving offers requires the laptop hub");
+      },
+      saveRule() {
+        return fail("OFFLINE", "Saving rules requires the laptop hub");
       }
     },
 
     contacts: {
       list() {
-        return ok([
-          { id: "c1", name: "A. Rivera", month: 8, day: 6 }
-        ]);
+        return ok([{ id: "c1", name: "A. Rivera", month: 8, day: 6 }]);
       }
     },
 
     sms: {
-      query({ sinceId } = {}) {
-        void sinceId;
+      query() {
         return ok({ messages: [], latestId: null });
       }
     },
@@ -199,11 +546,7 @@
     ocr: {
       recognize(imageRef) {
         if (!imageRef) return fail("BAD_REF", "imageRef required");
-        return ok({
-          text: "",
-          blocks: [],
-          imageRef
-        });
+        return ok({ text: "", blocks: [], imageRef });
       }
     },
 
@@ -218,36 +561,66 @@
       }
     },
 
-    // secure.* rejects on purpose: returning tokens would expose them to the
-    // WebView. Configure tokens in Connect and reach them via Net.call.
     secure: {
       get() {
-        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled");
       },
       set() {
-        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled");
       },
       delete() {
-        return fail("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call");
+        return fail("SECURE_DISABLED", "Shelf.secure is disabled");
       }
     },
 
-    // Desktop mock has no Connect store. Real phone Shelf implements Net.call.
     Net: {
       call() {
-        return fail("NET_NATIVE_ONLY", "Net.call requires the native Shelf Connect store");
+        return fail("NET_NATIVE_ONLY", "Net.call requires native Shelf Connect");
       }
     },
 
     ai: {
       mode() {
-        return ok({ mode: "OFF" });
+        return ok({ mode: aiMode });
       },
-      setMode() {
-        return fail("AI_HUB_ONLY", "AI mode changes require the laptop hub");
+      setMode(mode) {
+        aiMode = mode || "OFF";
+        return ok({ mode: aiMode });
       },
       propose() {
-        return fail("AI_HUB_ONLY", "AI propose requires the laptop hub");
+        if (aiMode === "OFF") return ok({ mode: "OFF", proposal: null });
+        try {
+          const snap = buildSnapshot();
+          const flags = [];
+          if (snap.owed > 0) {
+            flags.push({
+              id: "flag-owed",
+              trigger: "owed",
+              why: "Outside payments balance",
+              action: "Collect reimbursement",
+              value: snap.owed,
+              deadline: null,
+              confidence: 0.8
+            });
+          }
+          if ((snap.safeToSpend?.remaining || 0) < 0) {
+            flags.push({
+              id: "flag-safe",
+              trigger: "safeToSpend",
+              why: "Safe-to-spend is negative",
+              action: "Cut discretionary spend this period",
+              value: snap.safeToSpend.remaining,
+              deadline: null,
+              confidence: 0.75
+            });
+          }
+          return ok({
+            mode: "LOCAL",
+            proposal: { summary: "Offline local nudges", flags, mutations: [] }
+          });
+        } catch (error) {
+          return Promise.reject(error);
+        }
       },
       proposals() {
         return ok({ proposals: [] });
@@ -258,19 +631,14 @@
       push(items) {
         const list = Array.isArray(items) ? items : [items];
         list.forEach((item) => {
-          outbox.push(item);
-          if (item?.type === "action.transaction.update" && item.data?.id) {
-            transactionOverrides[item.data.id] = { ...item.data };
-          }
-          if (item?.type === "action.settings.update" && item.data) {
-            Object.assign(mockSettings, item.data);
-          }
+          state.outbox.push(item);
+          applyOutboxItem(item);
         });
-        return ok({ queued: list.length, total: outbox.length });
+        saveState();
+        return ok({ queued: list.length, total: state.outbox.length });
       },
-      /** Mock-only helper for tests; real Shelf has no peek. */
       __peek() {
-        return outbox.slice();
+        return state.outbox.slice();
       }
     },
 

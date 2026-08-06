@@ -8,7 +8,9 @@
 (function (root) {
   "use strict";
 
-  if (root.Shelf?.__real || root.location?.protocol === "file:") return;
+  // Native Android Shelf wins. file:// stays on offline mock.
+  if (root.Shelf?.__real && !root.Shelf?.__mock) return;
+  if (root.location?.protocol === "file:") return;
   if (!/^https?:$/.test(root.location?.protocol || "")) return;
 
   function shelfError(code, message) {
@@ -32,20 +34,25 @@
     return payload;
   }
 
-  root.Shelf = {
+  function installHubRelay() {
+    root.Shelf = {
     __real: true,
     __hub: true,
     __version: 1,
     data: {
       async get(kind) {
-        if (!["transactions", "snapshot", "digest", "accounts"].includes(kind)) {
+        if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
           throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
         }
         const path =
-          kind === "accounts" ? "/api/accounts" : `/api/${encodeURIComponent(kind)}`;
+          kind === "accounts"
+            ? "/api/accounts"
+            : kind === "bills"
+              ? "/api/bills"
+              : kind === "rewards"
+                ? "/api/rewards"
+                : `/api/${encodeURIComponent(kind)}`;
         const payload = await request(path);
-        // The hub is the source of truth and may return raw rows. Expose them
-        // under the device-contract `transactions` field for a single app path.
         if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
           payload.transactions = payload.rows;
         }
@@ -71,6 +78,30 @@
         });
       }
     },
+    bills: {
+      list() {
+        return request("/api/bills");
+      },
+      create(bill) {
+        return request("/api/bills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bill)
+        });
+      },
+      update(id, patch) {
+        return request(`/api/bills/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+      },
+      remove(id) {
+        return request(`/api/bills/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
+      }
+    },
     import: {
       text(payload) {
         return request("/api/import", {
@@ -78,10 +109,45 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
+      },
+      list() {
+        return request("/api/imports");
+      },
+      undo(id) {
+        return request(`/api/imports/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
       }
     },
-    // secure.* rejects on purpose, matching the device: tokens live in Connect
-    // and are used via Net.call, never handed back to the WebView.
+    rewards: {
+      get() {
+        return request("/api/rewards");
+      },
+      optimize() {
+        return request("/api/rewards/optimize");
+      },
+      refresh(forceMock) {
+        return request("/api/rewards/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ forceMock: Boolean(forceMock) })
+        });
+      },
+      saveOffer(offer) {
+        return request("/api/rewards/offers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(offer)
+        });
+      },
+      saveRule(rule) {
+        return request("/api/rewards/rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(rule)
+        });
+      }
+    },
     secure: {
       get() {
         return Promise.reject(shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call"));
@@ -93,7 +159,6 @@
         return Promise.reject(shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call"));
       }
     },
-    // Browser HTML must not drive connectors. Phone Connect + Net.call stays native.
     Net: {
       call() {
         return Promise.reject(
@@ -134,4 +199,29 @@
       }
     }
   };
+    try {
+      root.dispatchEvent(new Event("shelf-hub-ready"));
+    } catch (_error) {
+      // ignore
+    }
+  }
+
+  // Offline mock already present (one-file app): only upgrade if hub is up.
+  if (root.Shelf?.__mock || root.Shelf?.__standalone) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 1200) : null;
+    fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined)
+      .then((response) => {
+        if (timer) clearTimeout(timer);
+        if (response.ok) installHubRelay();
+      })
+      .catch(() => {
+        if (timer) clearTimeout(timer);
+        // Stay offline — no hub required.
+      });
+    return;
+  }
+
+  // money.html / digest.html load order: hub first.
+  installHubRelay();
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -52,7 +52,10 @@ async function main() {
     return transactions.filter((tx) => tx.id !== id);
   }
   function snapshot(rows = transactions) {
-    return Model.computeSnapshot(rows, { asOfDate: "2026-08-05" });
+    return Model.computeSnapshot(rows, {
+      asOfDate: "2026-08-05",
+      ...Model.SAMPLE_FIXTURE
+    });
   }
 
   const savingsTransfer = transactions.find((tx) => tx.id === "tx-008");
@@ -79,7 +82,7 @@ async function main() {
   assert.equal(withAll.owed - withoutExternal.owed, 86.25);
   assert.equal(withAll.netWorth - withoutExternal.netWorth, -86.25);
   assert.equal(
-    withAll.spendingByCategory.dining - (withoutExternal.spendingByCategory.dining || 0),
+    withAll.spendingByCategoryAll.dining - (withoutExternal.spendingByCategoryAll.dining || 0),
     86.25
   );
 
