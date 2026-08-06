@@ -90,10 +90,13 @@ async function main() {
   );
   const root = await request(port, "GET", "/");
   assert.equal(root.status, 302, "root must redirect so hub home relative scripts resolve");
-  assert.equal(root.headers.location, "/apps/shelf/shelf.html");
-  const homePage = await request(port, "GET", "/apps/shelf/shelf.html");
+  assert.equal(root.headers.location, "/apps/app.html");
+  const homePage = await request(port, "GET", "/apps/app.html");
   assert.equal(homePage.status, 200);
-  assert.match(homePage.text, /Money|Digest|Shelf/i);
+  assert.match(homePage.text, /Money|Digest|Life/i);
+  const legacyShelf = await request(port, "GET", "/apps/shelf/shelf.html");
+  assert.equal(legacyShelf.status, 302);
+  assert.equal(legacyShelf.headers.location, "/apps/app.html");
   const moneyPage = await request(port, "GET", "/apps/money/money.html");
   assert.equal(moneyPage.status, 200);
   assert.match(moneyPage.text, /hub-shelf\.js/);

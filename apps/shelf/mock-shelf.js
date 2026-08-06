@@ -2,7 +2,8 @@
  * mock-shelf.js — offline Shelf (no hub required)
  *
  * Installs when a real native Shelf bridge is absent. Persists to localStorage
- * so downloading shelf.html and opening it (file:// or any browser) works alone.
+ * so opening apps/app.html as file:// (browser preview) works alone.
+ * Real sync is via the Shelf Android gateway — this mock is preview-only.
  * Hub is optional: hub-shelf.js may upgrade this when /api/health is reachable.
  */
 (function (root) {
@@ -117,15 +118,7 @@
       bills: DEFAULT_BILLS.map((b) => ({ ...b })),
       accounts: DEFAULT_ACCOUNTS.map((a) => ({ ...a })),
       watching: [],
-      reading: [
-        {
-          id: "read:demo",
-          title: "Offline Shelf works without the hub",
-          url: "#offline",
-          source: "demo",
-          rank: 1
-        }
-      ],
+      reading: [],
       junk: [],
       outbox: []
     };

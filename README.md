@@ -2,8 +2,10 @@
 
 The laptop hub is the source of truth for this offline-first money and digest
 system. It owns the encrypted database, deterministic finance engine, localhost
-API, and static HTML. Browser pages call only `window.Shelf.*`; the Shelf adapter
-relays those calls to the local hub.
+API, and sync folder. **Shelf** (Android) is a thin WebView gateway
+(`window.Shelf.*`). The product UI is [`apps/app.html`](apps/app.html) — Money +
+Digest — which you load **in Shelf** so push/pull sync goes through the gateway.
+Hub browser relay is for laptop/dev only.
 
 ## Requirements
 
@@ -17,9 +19,9 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:8787/> when the hub is running, **or** just open
-`apps/shelf/shelf.html` as a file — it works offline (no hub). Phone setup:
-[`PHONE.md`](PHONE.md).
+Open <http://127.0.0.1:8787/> when the hub is running, **or** load
+`apps/app.html` in the Shelf Android gateway for real sync. Browser/`file://`
+open is preview-only. Phone setup: [`PHONE.md`](PHONE.md).
 The first launch creates the encrypted database, seeds starter accounts (UWCU
 checking/savings, Amex, Discover, Vanguard, outside payments) with **no sample
 transactions**, and stores a random database key in the OS keychain. To load the
@@ -44,6 +46,10 @@ There is deliberately no database-passphrase environment variable or hardcoded
 development key.
 
 ## Accounts, CSV import, and SimpleFIN
+
+Hub home is <http://127.0.0.1:8787/> (or `/apps/hub/home.html`): **Open app** for
+Money/Digest, **Setup** for pairing / SimpleFIN / Gmail / AI. Exit Setup anytime
+with ← Exit setup.
 
 Money accounts live in the encrypted DB and can be added anytime from the Money
 UI (**Add account**) or `POST /api/accounts`.
@@ -266,10 +272,19 @@ it contains the key. The JSON API returns the QR SVG + fingerprint only.
 
 ## Live email + bank
 
-Still mock by default (`npm run connectors:once`). For live:
+Gmail has a hub UI: open
+<http://127.0.0.1:8787/apps/hub/gmail.html>, paste a Google **Web** OAuth client
+id/secret (redirect URI must be exactly
+`http://127.0.0.1:8787/api/gmail/callback`), then **Connect with Google**.
+**Test pull** runs the live email connector into Digest. Secrets stay in the OS
+keychain.
+
+Still **live-or-skip by default** (`npm run connectors:once`). Mock data is
+opt-in only (`HUB_CONNECTORS_MOCK=1` or `{ "forceMock": true }`) and should not
+be used against your real database.
 
 ```powershell
-# Gmail OAuth (refresh token from your own OAuth consent flow)
+# Gmail OAuth (or use /apps/hub/gmail.html)
 npm run connectors:set-secret -- email.clientId
 npm run connectors:set-secret -- email.clientSecret
 npm run connectors:set-secret -- email.refreshToken
@@ -278,7 +293,6 @@ npm run connectors:set-secret -- email.refreshToken
 npm run connectors:set-secret -- bank.token
 npm run connectors:set-secret -- bank.endpoint
 
-$env:HUB_CONNECTORS_LIVE = "1"
 npm run connectors:once
 ```
 
@@ -292,11 +306,13 @@ npm run connectors:set-secret -- groupme.groupId
 npm run connectors:once
 ```
 
-`connectors:once` stays **mock by default**. Live GroupMe only when both secrets are set and:
+`connectors:once` runs **live-or-skip** (no fake rows). Opt into mocks only for
+tests:
 
 ```powershell
-$env:HUB_CONNECTORS_LIVE = "1"
+$env:HUB_CONNECTORS_MOCK = "1"
 npm run connectors:once
 ```
 
-Or `POST /api/connectors/run` with `{ "forceMock": false }`. Live email/bank fail closed without keychain secrets. Responses never include tokens.
+Or `POST /api/connectors/run` with `{ "forceMock": true }`. Live email/bank fail
+closed / skip without keychain secrets. Responses never include tokens.

@@ -1,33 +1,44 @@
-# Shelf app — one HTML file, no hub required
+# Life app (`app.html`) — Money + Digest frontend
+
+## Naming
+
+| Piece | Role |
+|-------|------|
+| **Shelf** (Android) | Gateway only — `window.Shelf.*` (data, outbox, fs). Not the product UI. |
+| **`apps/app.html`** | The frontend: Money + Digest. Load this **in Shelf** for real push/pull sync. |
+| **Hub** (laptop) | Source of truth (DB, connectors, sync folder). |
+
+Opening `app.html` as `file://` or in a normal browser is **preview-only** (local mock). It is not a standalone offline backend.
 
 ## File
 
-`apps/shelf/shelf.html`
+`apps/app.html`
 
-Download that **one** file. Open it in a browser or point Shelf at it.
+Raw GitHub (after push):
 
-It runs **offline** with sample money data + bills + digest. Edits save in the
-browser (`localStorage`). The laptop hub is optional.
+https://raw.githubusercontent.com/rohan123089/finance-digest/master/apps/app.html
 
-## Open offline (no `npm start`)
+Old path `apps/shelf/shelf.html` is gone; the hub still **302**s those URLs to `/apps/app.html`. GitHub raw will **not** redirect — use the new path above.
 
-1. Get `apps/shelf/shelf.html` (GitHub ZIP or copy from this repo).
-2. Open the file (double-click, or Shelf → load file).
-3. Use **Money** and **Digest** tabs.
+## Open in Shelf (real path)
 
-## Optional: connect to hub later
+1. Download `apps/app.html` (or load the raw URL in Shelf).
+2. Point Shelf at that file.
+3. Use **Money** and **Digest**; sync goes through Shelf APIs ↔ encrypted sync folder ↔ laptop hub.
 
-If you later open the same file from the hub URL while `npm start` is running:
+## Laptop hub (dev / live data in browser)
 
-http://127.0.0.1:8787/apps/shelf/shelf.html
+With `npm start`:
 
-…it will use live hub data instead. Phone on Wi‑Fi:
+http://127.0.0.1:8787/apps/app.html
 
-http://YOUR_LAPTOP_IP:8787/apps/shelf/shelf.html
+Phone on Wi‑Fi (hub API relay — laptop browser / same LAN only; phone production path is Shelf + sync folder):
 
-## Pairing / sync / bank import
+http://YOUR_LAPTOP_IP:8787/apps/app.html
 
-Those still need the hub. Day-to-day Money + Digest + rent reminders do not.
+## Pairing / bank import
+
+Those still need the hub. Day-to-day Money + Digest UI is `app.html`.
 
 Rebuild after changing sources:
 

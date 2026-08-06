@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const http = require("node:http");
 const fs = require("node:fs");
@@ -81,14 +81,17 @@ function serveStatic(req, res, urlPath) {
   // Never rewrite "/" in-place: relative script URLs would resolve from "/" and 404.
   // Also accept a few short aliases people type from the docs.
   const aliases = {
-    "/": "/apps/shelf/shelf.html",
-    "/shelf": "/apps/shelf/shelf.html",
-    "/shelf.html": "/apps/shelf/shelf.html",
-    "/shelf/shelf.html": "/apps/shelf/shelf.html",
-    "/apps/shelf": "/apps/shelf/shelf.html",
-    "/apps/shelf/": "/apps/shelf/shelf.html",
-    "/home": "/apps/shelf/shelf.html",
-    "/apps/hub/home.html": "/apps/shelf/shelf.html"
+    "/": "/apps/app.html",
+    "/shelf": "/apps/app.html",
+    "/shelf.html": "/apps/app.html",
+    "/shelf/shelf.html": "/apps/app.html",
+    "/apps/shelf": "/apps/app.html",
+    "/apps/shelf/": "/apps/app.html",
+    "/apps/shelf/shelf.html": "/apps/app.html",
+    "/home": "/apps/app.html",
+    "/apps/hub/home.html": "/apps/app.html",
+    "/app": "/apps/app.html",
+    "/app.html": "/apps/app.html"
   };
   if (aliases[urlPath]) {
     res.writeHead(302, {
@@ -114,7 +117,7 @@ function serveStatic(req, res, urlPath) {
     !fs.existsSync(filePath) ||
     fs.statSync(filePath).isDirectory()
   ) {
-    sendJson(res, 404, { error: "Not found", path: urlPath, try: "/apps/shelf/shelf.html" });
+    sendJson(res, 404, { error: "Not found", path: urlPath, try: "/apps/app.html" });
     return;
   }
   const ext = path.extname(filePath).toLowerCase();
@@ -147,7 +150,7 @@ function createServer(db, options = {}) {
             connectors: await secretStore.listConfiguredConnectors(),
             aiMode: ai.getAiMode(db),
             pairingPath: "/apps/hub/pairing.html",
-            homePath: "/apps/shelf/shelf.html",
+            homePath: "/apps/app.html",
             lifeCapture: true
           });
         }
@@ -426,7 +429,7 @@ function createServer(db, options = {}) {
           const card = await pairing.buildPairing(projectRoot, {
             hubUrl: `http://${HOST}:${PORT}`
           });
-          // Return QR SVG + fingerprint only — do not also echo the raw key JSON.
+          // Return QR SVG + fingerprint only ΓÇö do not also echo the raw key JSON.
           return sendJson(res, 200, {
             fingerprint: card.fingerprint,
             hub: card.hub,
@@ -637,7 +640,8 @@ async function main() {
   const server = createServer(db);
   server.listen(PORT, HOST, () => {
     console.log(`Finance hub listening on http://${HOST}:${PORT}`);
-    console.log(`Shelf app: http://${HOST}:${PORT}/apps/shelf/shelf.html`);
+    console.log(`App: http://${HOST}:${PORT}/apps/app.html`);
+    console.log(`(Shelf = Android gateway; this HTML is the Money + Digest frontend)`);
     console.log(`Money UI:  http://${HOST}:${PORT}/apps/money/money.html`);
     console.log(`Digest UI: http://${HOST}:${PORT}/apps/digest/digest.html`);
     console.log(`Pair phone: http://${HOST}:${PORT}/apps/hub/pairing.html`);

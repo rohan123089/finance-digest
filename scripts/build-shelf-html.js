@@ -1,15 +1,16 @@
 "use strict";
 
 /**
- * Builds apps/shelf/shelf.html — one downloadable HTML for Shelf
- * (Money + Digest tabs, all scripts inlined).
+ * Builds apps/app.html — one downloadable HTML frontend for Money + Digest.
+ * Load it in the Shelf Android gateway (or laptop hub). Bridge scripts stay in apps/shelf/.
  */
 
 const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.join(__dirname, "..");
-const outPath = path.join(root, "apps", "shelf", "shelf.html");
+const outPath = path.join(root, "apps", "app.html");
+const legacyShelfHtml = path.join(root, "apps", "shelf", "shelf.html");
 
 function read(rel) {
   return fs.readFileSync(path.join(root, rel), "utf8");
@@ -26,7 +27,7 @@ const html = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Shelf · Money & Digest</title>
+  <title>Life · Money & Digest</title>
   <style>
     :root {
       color-scheme: dark;
@@ -130,13 +131,14 @@ const html = `<!doctype html>
   <div class="shell">
     <div class="top">
       <div class="brand">
-        <div class="eyebrow">One app</div>
-        <h1>Shelf</h1>
+        <div class="eyebrow">Money + Digest</div>
+        <h1>Life</h1>
       </div>
       <div class="tabs" role="tablist">
         <button type="button" class="active" data-tab="money">Money</button>
         <button type="button" data-tab="digest">Digest</button>
       </div>
+      <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--blue);font-size:13px;text-decoration:none">Setup</a>
       <div class="bridge" id="bridge">Starting…</div>
     </div>
 
@@ -475,12 +477,14 @@ ${hubShelf}
 
   function setBridgeLabel() {
     document.querySelector("#bridge").textContent = Shelf.__hub
-      ? "Connected to laptop hub"
-      : Shelf.__standalone || Shelf.__mock
-        ? "Offline · works without hub (saved in this browser)"
-        : Shelf.__real
-          ? "Device Shelf"
+      ? "Laptop hub · preview (real sync is via Shelf gateway)"
+      : Shelf.__real
+        ? "Shelf gateway · push/pull sync"
+        : Shelf.__standalone || Shelf.__mock
+          ? "Browser preview only · open in Shelf for sync"
           : "Shelf";
+    const setup = document.querySelector("#setup-link");
+    if (setup) setup.hidden = !(Shelf.__hub || location.protocol === "http:");
   }
 
   async function boot() {
@@ -513,5 +517,10 @@ const fixed = html
   .replace(/class=\\"row\\"/g, 'class="row"')
   .replace(/\\\\"/g, '"');
 
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, fixed);
+if (fs.existsSync(legacyShelfHtml)) {
+  fs.unlinkSync(legacyShelfHtml);
+  console.log("Removed legacy", legacyShelfHtml);
+}
 console.log("Wrote", outPath, "(" + Math.round(fixed.length / 1024) + " KB)");
