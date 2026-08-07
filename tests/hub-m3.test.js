@@ -69,9 +69,47 @@ async function main() {
   assert.equal(dbApi.getConnectorWatermark(db, "groupme"), "998878");
 
   // Live paths without keychain secrets must fail closed (no silent env fallback).
-  await assert.rejects(() => connectors.runGroupMe(db, { forceMock: false }), /keychain|token|GroupMe/i);
-  await assert.rejects(() => connectors.runEmail(db, { forceMock: false }), /mock|configured|OAuth/i);
-  await assert.rejects(() => connectors.runBank(db, { forceMock: false }), /mock|configured|Bank/i);
+  // Clear any real laptop secrets for this assertion, then restore.
+  const secretStore = require("../hub/secret-store.js");
+  const priorSecrets = {};
+  for (const name of [
+    "groupme.token",
+    "groupme.groupId",
+    "email.clientId",
+    "email.clientSecret",
+    "email.refreshToken",
+    "email.1.refreshToken",
+    "email.2.refreshToken",
+    "email.3.refreshToken",
+    "bank.token"
+  ]) {
+    priorSecrets[name] = await secretStore.getConnectorSecret(name);
+    if (priorSecrets[name]) {
+      try {
+        await secretStore.deleteConnectorSecret(name);
+      } catch (_e) {
+        // ignore
+      }
+    }
+  }
+  try {
+    await assert.rejects(
+      () => connectors.runGroupMe(db, { forceMock: false }),
+      /keychain|token|GroupMe/i
+    );
+    await assert.rejects(
+      () => connectors.runEmail(db, { forceMock: false }),
+      /mock|configured|OAuth/i
+    );
+    await assert.rejects(
+      () => connectors.runBank(db, { forceMock: false }),
+      /mock|configured|Bank/i
+    );
+  } finally {
+    for (const [name, value] of Object.entries(priorSecrets)) {
+      if (value) await secretStore.setConnectorSecret(name, value);
+    }
+  }
 
   const server = createServer(db, { projectRoot, syncRoot });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

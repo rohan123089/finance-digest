@@ -12,8 +12,10 @@ const connectors = require("./connectors/index.js");
 const simplefin = require("./connectors/simplefin.js");
 const gmail = require("./connectors/gmail.js");
 const canvas = require("./connectors/canvas.js");
+const groupme = require("./connectors/groupme.js");
 const ai = require("./ai.js");
 const pairing = require("./pairing.js");
+const phoneDoorway = require("./phone-doorway.js");
 const importer = require("./import/index.js");
 const billsEngine = require("../engine/bills.js");
 const rewardsEngine = require("../engine/rewards.js");
@@ -144,6 +146,10 @@ function createServer(db, options = {}) {
 
       if (pathname.startsWith("/api/")) {
         if (req.method === "GET" && pathname === "/api/health") {
+          const doorway = await phoneDoorway.buildPhoneDoorway(projectRoot, {
+            host: HOST,
+            port: PORT
+          });
           return sendJson(res, 200, {
             ok: true,
             database: "sqlcipher",
@@ -154,7 +160,12 @@ function createServer(db, options = {}) {
             pairingPath: "/apps/hub/pairing.html",
             homePath: "/apps/app.html",
             appPath: "/apps/app.html",
-            lifeCapture: true
+            lifeCapture: true,
+            hubHost: HOST,
+            hubPort: PORT,
+            lanBound: doorway.lanBound,
+            phoneUrl: doorway.preferredUrl,
+            phoneUrls: doorway.urls
           });
         }
 
@@ -391,7 +402,13 @@ function createServer(db, options = {}) {
 
         if (req.method === "GET" && pathname === "/api/gmail/auth-url") {
           try {
-            const result = await gmail.buildAuthUrl({ host: HOST, port: PORT });
+            const url = new URL(req.url, `http://${HOST}:${PORT}`);
+            const slot = url.searchParams.get("slot") || "1";
+            const result = await gmail.buildAuthUrl({
+              host: HOST,
+              port: PORT,
+              slot
+            });
             return sendJson(res, 200, result);
           } catch (error) {
             return sendJson(res, 400, { error: error.message || String(error) });
@@ -411,20 +428,22 @@ function createServer(db, options = {}) {
           };
           if (err) return fail(err);
           if (!code) return fail("Missing authorization code");
-          if (!gmail.consumeOAuthState(state)) {
+          const consumed = gmail.consumeOAuthState(state);
+          if (!consumed) {
             return fail("OAuth state expired or invalid — try Connect again");
           }
           try {
             const result = await gmail.exchangeCode(code, {
               host: HOST,
               port: PORT,
+              slot: consumed.slot,
               fetchImpl: options.fetchImpl
             });
             const emailQs = result.email
               ? `&email=${encodeURIComponent(result.email)}`
               : "";
             res.writeHead(302, {
-              Location: `/apps/hub/gmail.html?connected=1${emailQs}`
+              Location: `/apps/hub/gmail.html?connected=1&slot=${result.slot}${emailQs}`
             });
             res.end();
           } catch (error) {
@@ -435,12 +454,17 @@ function createServer(db, options = {}) {
 
         if (req.method === "POST" && pathname === "/api/gmail/test") {
           try {
-            const result = await connectors.runEmail(db, { forceMock: false });
+            const body = await readBody(req).catch(() => ({}));
+            const result = await connectors.runEmail(db, {
+              forceMock: false,
+              slot: body?.slot
+            });
             await sync.publishDown(db, projectRoot, syncRoot);
             return sendJson(res, 200, {
               ok: true,
               mode: result.mode,
-              emitted: result.emitted.length
+              emitted: result.emitted.length,
+              accounts: result.accounts || []
             });
           } catch (error) {
             return sendJson(res, 502, { error: error.message || String(error) });
@@ -448,7 +472,12 @@ function createServer(db, options = {}) {
         }
 
         if (req.method === "POST" && pathname === "/api/gmail/disconnect") {
-          await gmail.disconnect();
+          const body = await readBody(req).catch(() => ({}));
+          if (body?.slot != null) {
+            await gmail.disconnectAccount(body.slot);
+          } else {
+            await gmail.disconnect();
+          }
           return sendJson(res, 200, { ok: true });
         }
 
@@ -488,6 +517,66 @@ function createServer(db, options = {}) {
 
         if (req.method === "POST" && pathname === "/api/canvas/disconnect") {
           await canvas.disconnect();
+          return sendJson(res, 200, { ok: true });
+        }
+
+        if (req.method === "GET" && pathname === "/api/groupme/status") {
+          return sendJson(res, 200, await groupme.getStatus());
+        }
+
+        if (req.method === "POST" && pathname === "/api/groupme/client") {
+          const body = await readBody(req);
+          try {
+            if (body.groupId != null && body.token) {
+              const result = await groupme.saveCredentials(body.token, body.groupId);
+              return sendJson(res, 200, result);
+            }
+            if (body.token && body.groupId == null) {
+              const result = await groupme.saveToken(body.token);
+              return sendJson(res, 200, result);
+            }
+            if (body.groupId != null && !body.token) {
+              const result = await groupme.saveGroupId(body.groupId);
+              return sendJson(res, 200, result);
+            }
+            throw new Error("Provide token and/or groupId");
+          } catch (error) {
+            return sendJson(res, 400, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "GET" && pathname === "/api/groupme/groups") {
+          try {
+            const groups = await groupme.listGroups({
+              fetchImpl: options.fetchImpl
+            });
+            return sendJson(res, 200, { groups });
+          } catch (error) {
+            return sendJson(res, 502, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/groupme/test") {
+          const body = await readBody(req);
+          try {
+            const result = await connectors.runGroupMe(db, {
+              forceMock: body.forceMock === true,
+              fetchImpl: options.fetchImpl
+            });
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, {
+              ok: true,
+              mode: result.mode,
+              emitted: result.emitted.length,
+              error: result.error || null
+            });
+          } catch (error) {
+            return sendJson(res, 502, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/groupme/disconnect") {
+          await groupme.disconnect();
           return sendJson(res, 200, { ok: true });
         }
 
@@ -558,6 +647,14 @@ function createServer(db, options = {}) {
             generatedAt: card.generatedAt,
             svg: card.svg
           });
+        }
+
+        if (req.method === "GET" && pathname === "/api/sync/phone") {
+          const card = await phoneDoorway.buildPhoneDoorway(projectRoot, {
+            host: HOST,
+            port: PORT
+          });
+          return sendJson(res, 200, card);
         }
 
         if (req.method === "GET" && pathname === "/api/digest") {
@@ -768,14 +865,23 @@ async function main() {
   const server = createServer(db);
   server.listen(PORT, HOST, () => {
     console.log(`Finance hub listening on http://${HOST}:${PORT}`);
-    console.log(`App: http://${HOST}:${PORT}/apps/app.html`);
-    console.log(`(Shelf = Android gateway; this HTML is the Money + Digest frontend)`);
-    console.log(`Money UI:  http://${HOST}:${PORT}/apps/money/money.html`);
-    console.log(`Digest UI: http://${HOST}:${PORT}/apps/digest/digest.html`);
-    console.log(`Pair phone: http://${HOST}:${PORT}/apps/hub/pairing.html`);
-    console.log(`SimpleFIN:  http://${HOST}:${PORT}/apps/hub/simplefin.html`);
-    console.log(`Gmail:      http://${HOST}:${PORT}/apps/hub/gmail.html`);
-    console.log(`Canvas:     http://${HOST}:${PORT}/apps/hub/canvas.html`);
+    console.log(`App: http://127.0.0.1:${PORT}/apps/app.html`);
+    console.log(`(Shelf = doorway; open the LAN app URL in Shelf for live hub data)`);
+    if (phoneDoorway.isLanBound(HOST)) {
+      const ips = phoneDoorway.listLanIPv4();
+      if (ips.length) {
+        console.log(`Phone (LAN): http://${ips[0]}:${PORT}/apps/app.html`);
+      }
+    } else {
+      console.log(`Phone LAN: set HUB_HOST=0.0.0.0 then restart (Sync tab shows QR)`);
+    }
+    console.log(`Money UI:  http://127.0.0.1:${PORT}/apps/money/money.html`);
+    console.log(`Digest UI: http://127.0.0.1:${PORT}/apps/digest/digest.html`);
+    console.log(`Pair phone: http://127.0.0.1:${PORT}/apps/hub/pairing.html`);
+    console.log(`SimpleFIN:  http://127.0.0.1:${PORT}/apps/hub/simplefin.html`);
+    console.log(`Gmail:      http://127.0.0.1:${PORT}/apps/hub/gmail.html`);
+    console.log(`Canvas:     http://127.0.0.1:${PORT}/apps/hub/canvas.html`);
+    console.log(`GroupMe:    http://127.0.0.1:${PORT}/apps/hub/groupme.html`);
     console.log(`Encrypted DB key: ${secretStore.SERVICE} in the OS keychain`);
     console.log(`Sync folder: ${SYNC_ROOT}`);
   });

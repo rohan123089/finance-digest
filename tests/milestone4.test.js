@@ -28,7 +28,7 @@ async function main() {
 
   const afterCount = dbApi.listTransactions(db).length;
   assert.equal(afterCount, beforeCount + result.bank.emitted.length);
-  assert.equal(dbApi.getConnectorWatermark(db, "groupme"), "998877");
+  assert.equal(dbApi.getConnectorWatermark(db, "groupme"), "998878");
   assert.ok(dbApi.listSyncItems(db).some((item) => item.source === "groupme"));
 
   db.close();

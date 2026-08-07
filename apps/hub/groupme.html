@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GroupMe connect</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(720px, 94vw); margin: 0 auto; padding: 28px 0 48px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    section {
+      border: 1px solid #283544;
+      border-radius: 12px;
+      background: #121922;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    h2 { margin: 0 0 10px; font-size: 15px; }
+    label { display: block; color: #91a0ad; font-size: 12px; margin: 10px 0 6px; }
+    input, button, select {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid #283544;
+      background: #18212c;
+      color: #edf3f8;
+      padding: 8px 10px;
+    }
+    input, select { width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; }
+    button.primary {
+      background: #5ee0a0;
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    button.danger { border-color: #7b3030; color: #ff9b9b; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .meta { color: #91a0ad; font-size: 12px; margin-top: 10px; }
+    .error { color: #ff7b7b; }
+    .ok { color: #5ee0a0; }
+    ol { margin: 0; padding-left: 18px; color: #c5d0d8; }
+    li { margin: 6px 0; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .pill.on { background: #143528; color: #5ee0a0; }
+    .pill.off { background: #2a1c1c; color: #ff9b9b; }
+    a { color: #74b9ff; }
+    .nav { margin-bottom: 16px; }
+    .nav a { color: #91a0ad; text-decoration: none; font-size: 13px; }
+    code { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="nav"><a href="/apps/hub/setup.html">← Setup</a></div>
+    <h1>GroupMe</h1>
+    <p class="sub">
+      Pull recent messages from one GroupMe group into Digest (plans, deadlines, links).
+      Uses your personal access token — secrets stay in the Windows keychain.
+    </p>
+
+    <section>
+      <h2>Status</h2>
+      <div id="status-pills"></div>
+      <div class="meta" id="status-detail">Loading…</div>
+    </section>
+
+    <section>
+      <h2>1 · Get an access token</h2>
+      <ol>
+        <li>Open <a href="https://dev.groupme.com/" target="_blank" rel="noopener">dev.groupme.com</a> and sign in.</li>
+        <li>Click your name → <strong>Access Token</strong> (or create an application and copy the token).</li>
+        <li>Paste it below. Treat it like a password.</li>
+      </ol>
+      <label for="token">Access token</label>
+      <input id="token" type="password" placeholder="Paste GroupMe access token" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button class="primary" id="save-token">Save token</button>
+        <button id="load-groups">Load my groups</button>
+      </div>
+      <div class="meta" id="token-status"></div>
+    </section>
+
+    <section>
+      <h2>2 · Choose a group</h2>
+      <p class="meta" style="margin-top:0">
+        After the token is saved, load groups and pick one — or paste a group id from the GroupMe URL
+        (<code>…/chats/GROUP_ID/…</code>).
+      </p>
+      <label for="group-select">Group</label>
+      <select id="group-select">
+        <option value="">— load groups or paste id below —</option>
+      </select>
+      <label for="group-id">Group id</label>
+      <input id="group-id" placeholder="e.g. 12345678" spellcheck="false" autocomplete="off">
+      <div class="row">
+        <button class="primary" id="save-group">Save group</button>
+        <button class="primary" id="test">Test pull → Digest</button>
+        <button class="danger" id="disconnect">Disconnect</button>
+      </div>
+      <div class="meta" id="save-status"></div>
+    </section>
+
+    <section>
+      <h2>After connect</h2>
+      <ol>
+        <li>Click <strong>Test pull</strong> (or Setup → Run connectors once).</li>
+        <li>Open <a href="/apps/digest/digest.html">Digest</a> — chat plans show under Today / Watching.</li>
+      </ol>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const text = await response.text();
+      let payload = null;
+      try { payload = text ? JSON.parse(text) : null; } catch (_e) { payload = { error: text }; }
+      if (!response.ok) throw new Error((payload && payload.error) || "Request failed");
+      return payload;
+    }
+
+    function setMsg(el, text, ok) {
+      el.textContent = text || "";
+      el.className = "meta " + (ok === true ? "ok" : ok === false ? "error" : "");
+    }
+
+    function pill(label, on) {
+      return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "yes" : "no"}</span>`;
+    }
+
+    async function refreshStatus() {
+      const status = await api("/api/groupme/status");
+      document.querySelector("#status-pills").innerHTML =
+        pill("token", status.token) +
+        pill("group", Boolean(status.groupId)) +
+        pill("connected", status.connected);
+      document.querySelector("#status-detail").textContent = status.groupId
+        ? `Watching group ${status.groupId}`
+        : status.token
+          ? "Token saved — pick a group next."
+          : "Not connected yet.";
+      if (status.groupId && !document.querySelector("#group-id").value) {
+        document.querySelector("#group-id").value = status.groupId;
+      }
+      return status;
+    }
+
+    document.querySelector("#group-select").addEventListener("change", (event) => {
+      if (event.target.value) {
+        document.querySelector("#group-id").value = event.target.value;
+      }
+    });
+
+    document.querySelector("#save-token").addEventListener("click", async () => {
+      const el = document.querySelector("#token-status");
+      setMsg(el, "Saving…");
+      try {
+        await api("/api/groupme/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: document.querySelector("#token").value })
+        });
+        document.querySelector("#token").value = "";
+        setMsg(el, "Token saved in Windows Credential Manager.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#load-groups").addEventListener("click", async () => {
+      const el = document.querySelector("#token-status");
+      const token = document.querySelector("#token").value.trim();
+      setMsg(el, "Loading groups…");
+      try {
+        if (token) {
+          await api("/api/groupme/client", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token })
+          });
+          document.querySelector("#token").value = "";
+        }
+        const payload = await api("/api/groupme/groups");
+        const select = document.querySelector("#group-select");
+        const status = await refreshStatus();
+        select.innerHTML = '<option value="">— pick a group —</option>';
+        (payload.groups || []).forEach((group) => {
+          const opt = document.createElement("option");
+          opt.value = group.id;
+          opt.textContent = group.members != null
+            ? `${group.name} (${group.members} members)`
+            : group.name;
+          if (status.groupId && status.groupId === group.id) opt.selected = true;
+          select.appendChild(opt);
+        });
+        if (!payload.groups?.length) {
+          setMsg(el, "No groups returned — check the token.", false);
+          return;
+        }
+        setMsg(el, `Loaded ${payload.groups.length} group(s).`, true);
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#save-group").addEventListener("click", async () => {
+      const el = document.querySelector("#save-status");
+      const groupId =
+        document.querySelector("#group-id").value.trim() ||
+        document.querySelector("#group-select").value;
+      setMsg(el, "Saving…");
+      try {
+        await api("/api/groupme/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ groupId })
+        });
+        setMsg(el, "Group saved.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#test").addEventListener("click", async () => {
+      const el = document.querySelector("#save-status");
+      setMsg(el, "Pulling GroupMe…");
+      try {
+        const payload = await api("/api/groupme/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        if (payload.mode === "skipped") {
+          setMsg(el, payload.error || "Skipped — not configured.", false);
+          return;
+        }
+        setMsg(
+          el,
+          `Live pull ok · ${payload.emitted} signal(s). Open Digest.`,
+          true
+        );
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#disconnect").addEventListener("click", async () => {
+      if (!confirm("Remove GroupMe secrets from the keychain?")) return;
+      const el = document.querySelector("#save-status");
+      try {
+        await api("/api/groupme/disconnect", { method: "POST" });
+        document.querySelector("#group-id").value = "";
+        document.querySelector("#group-select").innerHTML =
+          '<option value="">— load groups or paste id below —</option>';
+        setMsg(el, "Disconnected.", true);
+        setMsg(document.querySelector("#token-status"), "");
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    refreshStatus().catch((error) => {
+      document.querySelector("#status-detail").textContent = error.message;
+      document.querySelector("#status-detail").className = "meta error";
+    });
+  </script>
+</body>
+</html>

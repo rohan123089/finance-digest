@@ -2,10 +2,10 @@
 
 The laptop hub is the source of truth for this offline-first money and digest
 system. It owns the encrypted database, deterministic finance engine, localhost
-API, and sync folder. **Shelf** (Android) is a thin WebView gateway
-(`window.Shelf.*`). The product UI is [`apps/app.html`](apps/app.html) — Money +
-Digest — which you load **in Shelf** so push/pull sync goes through the gateway.
-Hub browser relay is for laptop/dev only.
+API, and sync folder. **Shelf** (Android) is a thin **doorway** (WebView) that
+opens the hub app URL. The product UI is [`apps/app.html`](apps/app.html) —
+Money + Digest + Sync. Load that URL **in Shelf on the same Wi‑Fi** for live
+hub data. Opening a downloaded `file://` copy is preview-only.
 
 ## Requirements
 
@@ -19,9 +19,9 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:8787/> when the hub is running, **or** load
-`apps/app.html` in the Shelf Android gateway for real sync. Browser/`file://`
-open is preview-only. Phone setup: [`PHONE.md`](PHONE.md).
+Open <http://127.0.0.1:8787/> when the hub is running. Phone: set
+`HUB_HOST=0.0.0.0`, restart, then open the **Sync** tab and load the LAN URL in
+Shelf. Details: [`PHONE.md`](PHONE.md).
 The first launch creates the encrypted database, seeds starter accounts (UWCU
 checking/savings, Amex, Discover, Vanguard, outside payments) with **no sample
 transactions**, and stores a random database key in the OS keychain. To load the
@@ -36,8 +36,9 @@ Configuration:
 
 - `HUB_PORT` changes the localhost port (default `8787`).
 - `HUB_DB_PATH` changes the encrypted database path (default `data/finance.db`).
-- `HUB_HOST` defaults to `127.0.0.1`; keep it on loopback.
-- `HUB_SYNC_ROOT` changes the phone sync folder (default `sync/`).
+- `HUB_HOST` defaults to `127.0.0.1` (laptop only). Set `0.0.0.0` so the phone
+  can open the app on Wi‑Fi (Sync tab shows the LAN URL + QR).
+- `HUB_SYNC_ROOT` changes the optional offline sync folder (default `sync/`).
 - `HUB_SEED_SAMPLE=1` seeds sample transactions on an empty database.
   Do **not** use this once you are importing/syncing real accounts — demo rows
   contaminate net worth, invested, and category totals.
@@ -264,34 +265,59 @@ npm run connectors:set-secret -- ai.cloudModel
 Then set mode to `CLOUD` and propose. Only the redacted snapshot is sent; any
 model `mutations` are discarded. Without a key, CLOUD falls back to local rules.
 
-## Phone pairing (QR)
+## Phone doorway (LAN)
 
-Open <http://127.0.0.1:8787/apps/hub/pairing.html> on the laptop. Scan with Shelf
-to receive the shared libsodium sync key. Do not screenshot or forward the QR —
-it contains the key. The JSON API returns the QR SVG + fingerprint only.
+Restart with LAN bind, then open the app **Sync** tab (or see console for Phone URL):
+
+```powershell
+$env:HUB_HOST = "0.0.0.0"
+npm start
+```
+
+Open that LAN URL in Shelf on the same Wi‑Fi. Shelf is only the WebView doorway;
+live data comes from the hub. See [`PHONE.md`](PHONE.md).
+
+## Advanced offline pairing (QR)
+
+Optional encrypted-folder path: open <http://127.0.0.1:8787/apps/hub/pairing.html>
+on the laptop. Scan with Shelf only if you use the offline `sync/` folder flow.
+Do not screenshot or forward the QR — it contains the sync key. The JSON API
+returns the QR SVG + fingerprint only.
 
 ## Live email + bank
 
 Gmail has a hub UI: open
 <http://127.0.0.1:8787/apps/hub/gmail.html>, paste a Google **Web** OAuth client
 id/secret (redirect URI must be exactly
-`http://127.0.0.1:8787/api/gmail/callback`), then **Connect with Google**.
-**Test pull** runs the live email connector into Digest. Secrets stay in the OS
-keychain.
+`http://127.0.0.1:8787/api/gmail/callback`), then **Connect with Google** on up
+to **3 inbox slots**. One OAuth client covers all three Google accounts — add
+each address as a consent-screen test user. **Test pull** runs every connected
+inbox into Digest. Secrets stay in the OS keychain.
 
 Canvas LMS: open <http://127.0.0.1:8787/apps/hub/canvas.html>, paste your school
 Canvas base URL + a personal access token (Account → Settings → New Access Token).
 Assignments and upcoming events land in Digest as school tasks.
+
+GroupMe: open <http://127.0.0.1:8787/apps/hub/groupme.html>, paste an access token
+from [dev.groupme.com](https://dev.groupme.com/), load your groups (or paste a
+group id), then **Test pull**. Chat plans land in Digest.
 
 Still **live-or-skip by default** (`npm run connectors:once`). Mock data is
 opt-in only (`HUB_CONNECTORS_MOCK=1` or `{ "forceMock": true }`) and should not
 be used against your real database.
 
 ```powershell
-# Gmail OAuth (or use /apps/hub/gmail.html)
+# Gmail OAuth (or use /apps/hub/gmail.html) — up to 3 inboxes
 npm run connectors:set-secret -- email.clientId
 npm run connectors:set-secret -- email.clientSecret
-npm run connectors:set-secret -- email.refreshToken
+npm run connectors:set-secret -- email.1.refreshToken
+npm run connectors:set-secret -- email.2.refreshToken
+npm run connectors:set-secret -- email.3.refreshToken
+# optional labels:
+# npm run connectors:set-secret -- email.1.address
+# npm run connectors:set-secret -- email.2.address
+# npm run connectors:set-secret -- email.3.address
+# legacy single-inbox key email.refreshToken still migrates into slot 1
 
 # Read-only bank JSON endpoint: Authorization Bearer + { transactions: [...] }
 npm run connectors:set-secret -- bank.token

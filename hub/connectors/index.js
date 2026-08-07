@@ -14,75 +14,14 @@ const life = require("../../engine/life.js");
 const simplefin = require("./simplefin.js");
 const rewardsWeb = require("./rewards-web.js");
 const canvas = require("./canvas.js");
+const groupme = require("./groupme.js");
 
 async function runGroupMe(db, options = {}) {
-  const forceMock = options.forceMock === true;
-  const watermark = dbApi.getConnectorWatermark(db, "groupme") || "0";
-  let messages;
-  let mode = "live";
-
-  if (forceMock) {
-    mode = "mock";
-    messages = [
-      {
-        id: "998877",
-        text: "Dinner Friday 7pm at Luigi's — who's in?",
-        created_at: Math.floor(Date.now() / 1000),
-        name: "Sam"
-      },
-      {
-        id: "998878",
-        text: "Study group tonight in the library for midterm",
-        created_at: Math.floor(Date.now() / 1000) + 1,
-        name: "Alex"
-      }
-    ];
-  } else {
-    const data = await Net.call("groupme", { limit: 20 });
-    messages = data?.response?.messages || [];
-    mode = "live";
-  }
-
-  const emitted = [];
-  const collectedAt = new Date().toISOString();
-  messages.forEach((message) => {
-    if (String(message.id) <= String(watermark) && watermark !== "0") return;
-    const receivedAt = new Date((message.created_at || Date.now() / 1000) * 1000).toISOString();
-    const signals = life.extractFromChat({
-      id: String(message.id),
-      text: message.text || "",
-      from: message.name || "groupme",
-      receivedAt,
-      source: "groupme",
-      sourceRef: `groupme:msg/${message.id}`
-    });
-    if (!signals.length && message.text) {
-      signals.push({
-        id: `gm:${message.id}`,
-        type: "signal.event",
-        source: "groupme",
-        at: receivedAt,
-        data: {
-          title: String(message.text).slice(0, 120),
-          start: receivedAt,
-          domain: life.inferDomain(String(message.text), "groupme"),
-          sourceRef: `groupme:msg/${message.id}`,
-          dismissible: true
-        }
-      });
-    }
-    signals.forEach((item) => {
-      const row = { ...item, collectedAt };
-      if (row.id.startsWith("life:")) {
-        // keep life ids; also alias gm: for watermark continuity in tests
-      }
-      dbApi.upsertSyncItem(db, row);
-      emitted.push(row);
-    });
-    dbApi.setConnectorWatermark(db, "groupme", String(message.id));
+  return groupme.syncToDb(db, {
+    forceMock: options.forceMock === true,
+    fetchImpl: options.fetchImpl,
+    limit: options.limit
   });
-
-  return { source: "groupme", mode, emitted };
 }
 
 async function runSms(db, options = {}) {
@@ -193,16 +132,20 @@ function mockLifeMessages() {
 
 async function runEmail(db, options = {}) {
   const forceMock = options.forceMock === true;
-  const watermark = dbApi.getConnectorWatermark(db, "email") || "";
   let messages;
   let mode = "live";
+  let accounts = [];
 
   if (forceMock) {
     mode = "mock";
     messages = mockLifeMessages();
   } else {
-    const data = await Net.call("email", { maxResults: 15 });
+    const data = await Net.call("email", {
+      maxResults: 15,
+      slot: options.slot
+    });
     messages = Array.isArray(data.messages) ? data.messages : [];
+    accounts = Array.isArray(data.accounts) ? data.accounts : [];
     // Back-compat: older Net.call shape returned links only.
     if (!messages.length && Array.isArray(data.links)) {
       messages = data.links.map((link) => ({
@@ -213,6 +156,8 @@ async function runEmail(db, options = {}) {
         sharedBy: link.sharedBy,
         url: link.url,
         receivedAt: link.receivedAt,
+        accountSlot: link.accountSlot,
+        mailbox: link.mailbox,
         source: "email"
       }));
     }
@@ -221,6 +166,11 @@ async function runEmail(db, options = {}) {
   const emitted = [];
   const collectedAt = new Date().toISOString();
   messages.forEach((message) => {
+    const slot = Number(message.accountSlot) || 1;
+    const wmKey = `email:${slot}`;
+    const watermark =
+      dbApi.getConnectorWatermark(db, wmKey) ||
+      (slot === 1 ? dbApi.getConnectorWatermark(db, "email") || "" : "");
     if (watermark && String(message.id) <= String(watermark)) return;
     const signals = life.extractFromMessage(
       { ...message, source: "email", sourceRef: `email:${message.id}` },
@@ -236,7 +186,8 @@ async function runEmail(db, options = {}) {
           url: message.url,
           sharedBy: message.sharedBy || "email",
           context: null,
-          domain: "personal"
+          domain: "personal",
+          mailbox: message.mailbox || null
         }
       });
     }
@@ -245,10 +196,11 @@ async function runEmail(db, options = {}) {
       dbApi.upsertSyncItem(db, row);
       emitted.push(row);
     });
-    dbApi.setConnectorWatermark(db, "email", String(message.id));
+    dbApi.setConnectorWatermark(db, wmKey, String(message.id));
+    if (slot === 1) dbApi.setConnectorWatermark(db, "email", String(message.id));
   });
 
-  return { source: "email", mode, emitted };
+  return { source: "email", mode, emitted, accounts };
 }
 
 async function runBank(db, options = {}) {

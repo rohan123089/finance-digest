@@ -35,6 +35,7 @@
     input, textarea { width: 100%; box-sizing: border-box; }
     textarea { min-height: 64px; }
     button { cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
     button.primary {
       background: #5ee0a0;
       color: #062316;
@@ -65,6 +66,22 @@
     .pill.on { background: #143528; color: #5ee0a0; }
     .pill.off { background: #2a1c1c; color: #ff9b9b; }
     a { color: #74b9ff; }
+    .account {
+      border: 1px solid #283544;
+      border-radius: 10px;
+      padding: 12px;
+      margin-top: 10px;
+      background: #0f151c;
+    }
+    .account h3 {
+      margin: 0;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+    .account .addr { color: #91a0ad; font-size: 12px; margin-top: 6px; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -72,8 +89,8 @@
     <p style="margin:0 0 16px"><a href="/apps/hub/setup.html" style="color:#74b9ff;text-decoration:none">← Setup</a></p>
     <h1>Gmail</h1>
     <p class="sub">
-      Connect a dedicated Gmail (or your main one) so the hub can pull statements,
-      deadlines, and reading links into Digest. Laptop-only — secrets stay in the OS keychain.
+      Connect up to <strong>3 Gmail inboxes</strong> with one Google Cloud OAuth client.
+      Secrets stay in the OS keychain and reload after refresh.
     </p>
 
     <section>
@@ -87,12 +104,12 @@
       <ol>
         <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer">Google Cloud Console</a> → create/select a project.</li>
         <li>Enable <strong>Gmail API</strong>.</li>
-        <li>OAuth consent screen → External → add your new Gmail as a <strong>test user</strong>.</li>
+        <li>OAuth consent screen → External → add each Gmail as a <strong>test user</strong> (all 3).</li>
         <li>Credentials → Create OAuth client → type <strong>Web application</strong>.</li>
         <li>Add this exact redirect URI:</li>
       </ol>
       <p><code id="redirect-uri">http://127.0.0.1:8787/api/gmail/callback</code></p>
-      <p class="meta">Copy client id + secret from the downloaded JSON into step 2.</p>
+      <p class="meta">One client id/secret covers all three inboxes.</p>
     </section>
 
     <section>
@@ -100,7 +117,7 @@
       <label for="client-id">Client ID</label>
       <input id="client-id" autocomplete="off" spellcheck="false" placeholder="….apps.googleusercontent.com">
       <label for="client-secret">Client secret</label>
-      <input id="client-secret" type="password" autocomplete="off" spellcheck="false" placeholder="GOCSPX-…">
+      <input id="client-secret" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the secret already on file">
       <div class="row">
         <button class="primary" id="save-client">Save to keychain</button>
       </div>
@@ -108,15 +125,49 @@
     </section>
 
     <section>
-      <h2>3 · Connect inbox</h2>
+      <h2>3 · Connect inboxes (3 slots)</h2>
       <p class="meta" style="margin-top:0">
-        Sign in with the Gmail you want the hub to read (your new digest account is ideal).
-        Forward school Outlook there if you want those messages too.
+        Use a different Google account for each slot. Google will show an account picker.
       </p>
+      <!-- Always present in HTML so the UI works even if status.accounts is missing. -->
+      <div id="accounts">
+        <div class="account" data-slot="1">
+          <h3>
+            <span>Inbox 1</span>
+            <span class="pill off" data-pill>empty</span>
+          </h3>
+          <div class="addr" data-addr>Empty — connect a Gmail</div>
+          <div class="row">
+            <button class="primary" data-action="connect" data-slot="1">Connect with Google</button>
+            <button class="danger" data-action="disconnect" data-slot="1" disabled>Disconnect</button>
+          </div>
+        </div>
+        <div class="account" data-slot="2">
+          <h3>
+            <span>Inbox 2</span>
+            <span class="pill off" data-pill>empty</span>
+          </h3>
+          <div class="addr" data-addr>Empty — connect a Gmail</div>
+          <div class="row">
+            <button class="primary" data-action="connect" data-slot="2">Connect with Google</button>
+            <button class="danger" data-action="disconnect" data-slot="2" disabled>Disconnect</button>
+          </div>
+        </div>
+        <div class="account" data-slot="3">
+          <h3>
+            <span>Inbox 3</span>
+            <span class="pill off" data-pill>empty</span>
+          </h3>
+          <div class="addr" data-addr>Empty — connect a Gmail</div>
+          <div class="row">
+            <button class="primary" data-action="connect" data-slot="3">Connect with Google</button>
+            <button class="danger" data-action="disconnect" data-slot="3" disabled>Disconnect</button>
+          </div>
+        </div>
+      </div>
       <div class="row">
-        <button class="primary" id="connect">Connect with Google</button>
-        <button id="test">Test pull → Digest</button>
-        <button class="danger" id="disconnect">Disconnect</button>
+        <button id="test">Test pull all → Digest</button>
+        <button class="danger" id="disconnect-all">Disconnect all + client</button>
       </div>
       <div class="meta" id="connect-status"></div>
     </section>
@@ -124,9 +175,8 @@
     <section>
       <h2>After connect</h2>
       <ol>
-        <li>Click <strong>Test pull</strong> (or run connectors live from the hub).</li>
+        <li>Click <strong>Test pull all</strong>.</li>
         <li>Open <a href="/apps/digest/digest.html">Digest</a> and refresh.</li>
-        <li>UWCU statement emails become import reminders in Today.</li>
       </ol>
     </section>
   </main>
@@ -151,26 +201,119 @@
       return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "yes" : "no"}</span>`;
     }
 
+    function defaultAccounts() {
+      return [1, 2, 3].map((slot) => ({ slot, connected: false, email: null }));
+    }
+
+    function updateAccountCard(acct) {
+      const card = document.querySelector(`.account[data-slot="${acct.slot}"]`);
+      if (!card) return;
+      const pillEl = card.querySelector("[data-pill]");
+      const addr = card.querySelector("[data-addr]");
+      const connectBtn = card.querySelector('[data-action="connect"]');
+      const disconnectBtn = card.querySelector('[data-action="disconnect"]');
+      if (pillEl) {
+        pillEl.textContent = acct.connected ? "connected" : "empty";
+        pillEl.className = "pill " + (acct.connected ? "on" : "off");
+      }
+      if (addr) {
+        addr.textContent = acct.connected
+          ? (acct.email || "Connected (address pending)")
+          : "Empty — connect a Gmail";
+      }
+      if (connectBtn) {
+        connectBtn.textContent = acct.connected ? "Reconnect" : "Connect with Google";
+      }
+      if (disconnectBtn) {
+        disconnectBtn.disabled = !acct.connected;
+      }
+    }
+
     async function refreshStatus() {
       const status = await api("/api/gmail/status");
       document.querySelector("#redirect-uri").textContent = status.redirectUri;
+
+      const accounts = Array.isArray(status.accounts) && status.accounts.length
+        ? status.accounts
+        : defaultAccounts();
+      // Ensure slots 1–3 always update even if API returned a partial list.
+      for (const slot of [1, 2, 3]) {
+        const acct = accounts.find((a) => Number(a.slot) === slot) || {
+          slot,
+          connected: false,
+          email: null
+        };
+        updateAccountCard(acct);
+      }
+
+      const connectedCount = Number(status.connectedCount) ||
+        accounts.filter((a) => a.connected).length;
       document.querySelector("#status-pills").innerHTML =
         pill("client", status.clientId) +
         pill("secret", status.clientSecret) +
-        pill("refresh", status.refreshToken) +
-        pill("connected", status.connected);
+        pill(`inboxes ${connectedCount}/3`, connectedCount > 0);
+
+      if (status.clientIdValue) {
+        document.querySelector("#client-id").value = status.clientIdValue;
+      }
+      document.querySelector("#client-secret").placeholder = status.clientSecret
+        ? "Secret on file — leave blank to keep it"
+        : "GOCSPX-…";
+
       const detail = [];
-      if (status.email) detail.push(`Inbox: ${status.email}`);
-      detail.push(status.connected ? "Ready to pull mail." : "Not fully connected yet.");
+      if (status.clientIdValue) detail.push(`Client id loaded from keychain`);
+      if (status.clientSecret) detail.push(`client secret on file`);
+      if (connectedCount) {
+        const emails = accounts
+          .filter((a) => a.connected)
+          .map((a) => a.email || `inbox ${a.slot}`)
+          .join(", ");
+        detail.push(`Connected: ${emails}`);
+      } else {
+        detail.push("No inboxes connected yet.");
+      }
       document.querySelector("#status-detail").textContent = detail.join(" · ");
+      document.querySelector("#status-detail").className = "meta";
       return status;
     }
+
+    document.querySelector("#accounts").addEventListener("click", async (event) => {
+      const btn = event.target.closest("button[data-action]");
+      if (!btn || btn.disabled) return;
+      const slot = btn.getAttribute("data-slot");
+      const action = btn.getAttribute("data-action");
+      const el = document.querySelector("#connect-status");
+      if (action === "connect") {
+        setMsg(el, `Opening Google for inbox ${slot}…`);
+        try {
+          const payload = await api(`/api/gmail/auth-url?slot=${encodeURIComponent(slot)}`);
+          location.href = payload.url;
+        } catch (error) {
+          setMsg(el, error.message, false);
+        }
+        return;
+      }
+      if (action === "disconnect") {
+        if (!confirm(`Disconnect inbox ${slot}?`)) return;
+        try {
+          await api("/api/gmail/disconnect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slot: Number(slot) })
+          });
+          setMsg(el, `Inbox ${slot} disconnected.`, true);
+          await refreshStatus();
+        } catch (error) {
+          setMsg(el, error.message, false);
+        }
+      }
+    });
 
     document.querySelector("#save-client").addEventListener("click", async () => {
       const el = document.querySelector("#save-status");
       setMsg(el, "Saving…");
       try {
-        await api("/api/gmail/client", {
+        const result = await api("/api/gmail/client", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -179,19 +322,14 @@
           })
         });
         document.querySelector("#client-secret").value = "";
-        setMsg(el, "Saved in Windows Credential Manager.", true);
+        setMsg(
+          el,
+          result.secretUnchanged
+            ? "Client id updated. Existing secret kept."
+            : "Saved in Windows Credential Manager.",
+          true
+        );
         await refreshStatus();
-      } catch (error) {
-        setMsg(el, error.message, false);
-      }
-    });
-
-    document.querySelector("#connect").addEventListener("click", async () => {
-      const el = document.querySelector("#connect-status");
-      setMsg(el, "Opening Google…");
-      try {
-        const payload = await api("/api/gmail/auth-url");
-        location.href = payload.url;
       } catch (error) {
         setMsg(el, error.message, false);
       }
@@ -199,12 +337,19 @@
 
     document.querySelector("#test").addEventListener("click", async () => {
       const el = document.querySelector("#connect-status");
-      setMsg(el, "Pulling mail…");
+      setMsg(el, "Pulling mail from all connected inboxes…");
       try {
-        const payload = await api("/api/gmail/test", { method: "POST" });
+        const payload = await api("/api/gmail/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        const boxes = Array.isArray(payload.accounts)
+          ? payload.accounts.map((a) => `${a.email || `slot ${a.slot}`}:${a.messageCount}`).join(", ")
+          : "";
         setMsg(
           el,
-          `Live pull ok · ${payload.emitted} signal(s) · mode ${payload.mode}. Open Digest to review.`,
+          `Live pull ok · ${payload.emitted} signal(s) · mode ${payload.mode}${boxes ? ` · ${boxes}` : ""}.`,
           true
         );
       } catch (error) {
@@ -212,12 +357,18 @@
       }
     });
 
-    document.querySelector("#disconnect").addEventListener("click", async () => {
-      if (!confirm("Remove Gmail secrets from the keychain?")) return;
+    document.querySelector("#disconnect-all").addEventListener("click", async () => {
+      if (!confirm("Remove all Gmail inboxes and the OAuth client from the keychain?")) return;
       const el = document.querySelector("#connect-status");
       try {
-        await api("/api/gmail/disconnect", { method: "POST" });
-        setMsg(el, "Disconnected.", true);
+        await api("/api/gmail/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        document.querySelector("#client-id").value = "";
+        document.querySelector("#client-secret").value = "";
+        setMsg(el, "All Gmail secrets removed.", true);
         await refreshStatus();
       } catch (error) {
         setMsg(el, error.message, false);
@@ -226,11 +377,12 @@
 
     const params = new URLSearchParams(location.search);
     if (params.get("connected") === "1") {
+      const slot = params.get("slot") || "?";
       setMsg(
         document.querySelector("#connect-status"),
         params.get("email")
-          ? `Connected as ${params.get("email")}.`
-          : "Connected. Refresh token stored.",
+          ? `Inbox ${slot} connected as ${params.get("email")}.`
+          : `Inbox ${slot} connected. Refresh token stored.`,
         true
       );
       history.replaceState({}, "", "/apps/hub/gmail.html");
@@ -241,7 +393,8 @@
     }
 
     refreshStatus().catch((error) => {
-      document.querySelector("#status-detail").textContent = error.message;
+      document.querySelector("#status-detail").textContent =
+        error.message + " — restart the hub (npm start) if this persists.";
       document.querySelector("#status-detail").className = "meta error";
     });
   </script>

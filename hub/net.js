@@ -11,114 +11,139 @@ const URL_RE = /https?:\/\/[^\s<>"')]+/gi;
 
 async function call(service, request = {}) {
   if (service === "groupme") {
-    const token = await secretStore.getConnectorSecret("groupme.token");
-    const groupId =
-      request.groupId || (await secretStore.getConnectorSecret("groupme.groupId"));
-    if (!token) throw new Error("GroupMe token is not configured in the OS keychain");
-    if (!groupId) throw new Error("GroupMe group id is not configured in the OS keychain");
-
+    const groupme = require("./connectors/groupme.js");
     const limit = Number(request.limit) || 20;
-    const url = new URL(
-      `https://api.groupme.com/v3/groups/${encodeURIComponent(groupId)}/messages`
-    );
-    url.searchParams.set("limit", String(limit));
-    url.searchParams.set("token", token);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" }
+    return groupme.fetchMessages({
+      limit,
+      groupId: request.groupId,
+      fetchImpl: request.fetchImpl
     });
-    if (!response.ok) throw new Error(`GroupMe HTTP ${response.status}`);
-    return response.json();
   }
 
   if (service === "email") {
+    const gmail = require("./connectors/gmail.js");
     const clientId = await secretStore.getConnectorSecret("email.clientId");
     const clientSecret = await secretStore.getConnectorSecret("email.clientSecret");
-    const refreshToken = await secretStore.getConnectorSecret("email.refreshToken");
-    if (!clientId || !clientSecret || !refreshToken) {
+    const accounts = await gmail.getConnectedRefreshAccounts();
+    if (!clientId || !clientSecret || !accounts.length) {
       throw new Error(
-        "Email OAuth requires email.clientId, email.clientSecret, and email.refreshToken in the OS keychain"
+        "Email OAuth requires email.clientId, email.clientSecret, and at least one inbox refresh token (email.1–3.refreshToken)"
       );
     }
 
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: "refresh_token"
-      })
-    });
-    if (!tokenRes.ok) throw new Error(`Email OAuth token HTTP ${tokenRes.status}`);
-    const tokenJson = await tokenRes.json();
-    const accessToken = tokenJson.access_token;
-    if (!accessToken) throw new Error("Email OAuth did not return an access token");
-
     const maxResults = Number(request.maxResults) || 15;
-    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-    listUrl.searchParams.set("maxResults", String(maxResults));
-    // Prefer actionable mail; still catches newsletters with links.
-    listUrl.searchParams.set(
-      "q",
+    const query =
       request.query ||
-        "newer_than:21d (statement OR e-statement OR due OR deadline OR assignment OR meeting OR reminder OR \"action required\" OR rsvp OR has:link)"
-    );
-
-    const listRes = await fetch(listUrl, {
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" }
-    });
-    if (!listRes.ok) throw new Error(`Gmail list HTTP ${listRes.status}`);
-    const listJson = await listRes.json();
-    const messageRefs = Array.isArray(listJson.messages) ? listJson.messages : [];
+      "newer_than:21d (statement OR e-statement OR due OR deadline OR assignment OR meeting OR reminder OR \"action required\" OR rsvp OR has:link)";
+    const slotFilter = request.slot != null ? Number(request.slot) : null;
+    const selected =
+      slotFilter != null ? accounts.filter((a) => a.slot === slotFilter) : accounts;
+    if (!selected.length) {
+      throw new Error(`No Gmail refresh token for slot ${slotFilter}`);
+    }
 
     const messages = [];
     const links = [];
-    for (const message of messageRefs.slice(0, maxResults)) {
-      const detailRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(message.id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Accept: "application/json"
-          }
-        }
-      );
-      if (!detailRes.ok) continue;
-      const detail = await detailRes.json();
-      const headers = Array.isArray(detail.payload?.headers) ? detail.payload.headers : [];
-      const subject =
-        headers.find((h) => String(h.name).toLowerCase() === "subject")?.value || "";
-      const from =
-        headers.find((h) => String(h.name).toLowerCase() === "from")?.value || "";
-      const snippet = String(detail.snippet || "");
-      const receivedAt = detail.internalDate
-        ? new Date(Number(detail.internalDate)).toISOString()
-        : new Date().toISOString();
-      messages.push({
-        id: message.id,
-        subject,
-        snippet,
-        from,
-        sharedBy: "email",
-        receivedAt,
-        source: "email"
+    const pulled = [];
+
+    for (const account of selected) {
+      const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: account.refreshToken,
+          grant_type: "refresh_token"
+        })
       });
-      const found = `${subject}\n${snippet}`.match(URL_RE) || [];
-      found.forEach((rawUrl, index) => {
-        const cleaned = rawUrl.replace(/[.,;:]+$/, "");
-        links.push({
-          id: `${message.id}:${index}`,
-          url: cleaned,
-          title: subject,
-          sharedBy: "email",
-          receivedAt
+      if (!tokenRes.ok) {
+        throw new Error(
+          `Email OAuth token HTTP ${tokenRes.status} (inbox ${account.address || `slot ${account.slot}`})`
+        );
+      }
+      const tokenJson = await tokenRes.json();
+      const accessToken = tokenJson.access_token;
+      if (!accessToken) {
+        throw new Error(
+          `Email OAuth did not return an access token (inbox ${account.address || `slot ${account.slot}`})`
+        );
+      }
+
+      const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+      listUrl.searchParams.set("maxResults", String(maxResults));
+      listUrl.searchParams.set("q", query);
+
+      const listRes = await fetch(listUrl, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" }
+      });
+      if (!listRes.ok) {
+        throw new Error(
+          `Gmail list HTTP ${listRes.status} (inbox ${account.address || `slot ${account.slot}`})`
+        );
+      }
+      const listJson = await listRes.json();
+      const messageRefs = Array.isArray(listJson.messages) ? listJson.messages : [];
+      let count = 0;
+
+      for (const message of messageRefs.slice(0, maxResults)) {
+        const detailRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(message.id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json"
+            }
+          }
+        );
+        if (!detailRes.ok) continue;
+        const detail = await detailRes.json();
+        const headers = Array.isArray(detail.payload?.headers) ? detail.payload.headers : [];
+        const subject =
+          headers.find((h) => String(h.name).toLowerCase() === "subject")?.value || "";
+        const from =
+          headers.find((h) => String(h.name).toLowerCase() === "from")?.value || "";
+        const snippet = String(detail.snippet || "");
+        const receivedAt = detail.internalDate
+          ? new Date(Number(detail.internalDate)).toISOString()
+          : new Date().toISOString();
+        const stableId = `${account.slot}:${message.id}`;
+        messages.push({
+          id: stableId,
+          gmailId: message.id,
+          accountSlot: account.slot,
+          mailbox: account.address || null,
+          subject,
+          snippet,
+          from,
+          sharedBy: account.address || "email",
+          receivedAt,
+          source: "email"
         });
+        count += 1;
+        const found = `${subject}\n${snippet}`.match(URL_RE) || [];
+        found.forEach((rawUrl, index) => {
+          const cleaned = rawUrl.replace(/[.,;:]+$/, "");
+          links.push({
+            id: `${stableId}:${index}`,
+            url: cleaned,
+            title: subject,
+            sharedBy: account.address || "email",
+            receivedAt,
+            accountSlot: account.slot,
+            mailbox: account.address || null
+          });
+        });
+      }
+
+      pulled.push({
+        slot: account.slot,
+        email: account.address,
+        messageCount: count
       });
     }
-    return { messages, links };
+
+    return { messages, links, accounts: pulled };
   }
 
   if (service === "bank") {

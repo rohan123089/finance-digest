@@ -125,8 +125,14 @@
     </section>
 
     <section>
-      <h2>Phone pairing</h2>
-      <p>Scan a QR so Shelf on your phone shares the sync key.</p>
+      <h2>Phone doorway</h2>
+      <p>Open the Life app Sync tab for the LAN URL + QR. Shelf is only the WebView.</p>
+      <a class="goto" href="/apps/app.html">Open app Sync →</a>
+    </section>
+
+    <section>
+      <h2>Advanced offline pairing</h2>
+      <p>Optional encrypted sync-folder key exchange (not required for LAN doorway).</p>
       <a class="goto" href="/apps/hub/pairing.html">Open pairing →</a>
     </section>
 
@@ -138,7 +144,7 @@
 
     <section>
       <h2>Gmail</h2>
-      <p>Pull statement mail, deadlines, and reading links into Digest.</p>
+      <p>Pull statements, deadlines, and reading links from up to 3 Gmail inboxes.</p>
       <a class="goto" href="/apps/hub/gmail.html">Open Gmail →</a>
     </section>
 
@@ -146,6 +152,12 @@
       <h2>Canvas</h2>
       <p>Upcoming assignments and events from school Canvas → Digest school tasks.</p>
       <a class="goto" href="/apps/hub/canvas.html">Open Canvas →</a>
+    </section>
+
+    <section>
+      <h2>GroupMe</h2>
+      <p>Pull chat plans and deadlines from one GroupMe group into Digest.</p>
+      <a class="goto" href="/apps/hub/groupme.html">Open GroupMe →</a>
     </section>
 
     <section>
@@ -188,9 +200,9 @@
         const c = h.connectors || {};
         pills.innerHTML = [
           pill("SimpleFIN", Boolean(c["simplefin.accessUrl"])),
-          pill("Gmail", Boolean(c["email.refreshToken"])),
+          pill("Gmail", Boolean(c["email.refreshToken"] || c["email.1.refreshToken"] || c["email.2.refreshToken"] || c["email.3.refreshToken"])),
           pill("Canvas", Boolean(c["canvas.token"])),
-          pill("GroupMe", Boolean(c["groupme.token"])),
+          pill("GroupMe", Boolean(c["groupme.token"] && c["groupme.groupId"])),
           pill("Bank JSON", Boolean(c["bank.token"]))
         ].join("");
         meta.textContent = `Fingerprint ${h.syncKeyFingerprint || "—"} · AI ${h.aiMode || "OFF"}`;

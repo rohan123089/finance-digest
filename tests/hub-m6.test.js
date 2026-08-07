@@ -166,6 +166,8 @@ async function main() {
       if (name === "email.clientId") return "cid";
       if (name === "email.clientSecret") return "csecret";
       if (name === "email.refreshToken") return "refresh";
+      if (name === "email.1.refreshToken") return "refresh";
+      if (name === "email.1.address") return "live@example.com";
       if (name === "bank.token") return "bank-token";
       if (name === "bank.endpoint") return "https://bank.example/transactions";
       if (name === "groupme.token") return null;

@@ -4,13 +4,26 @@
 
 | Piece | Role |
 |-------|------|
-| **Shelf** (Android) | Gateway only — `window.Shelf.*` (data, outbox, fs). Not the product UI. |
-| **`apps/app.html`** | The frontend: Money + Digest. Load this **in Shelf** for real push/pull sync. |
-| **Hub** (laptop) | Source of truth (DB, connectors, sync folder). |
+| **Shelf** (Android) | **Doorway only** — WebView that opens the hub URL. Not the source of truth. |
+| **`apps/app.html`** | The frontend: Money + Digest + **Sync** tab. |
+| **Hub** (laptop) | Source of truth (DB, connectors, APIs). |
 
-Opening `app.html` as `file://` or in a normal browser is **preview-only** (local mock). It is not a standalone offline backend.
+## Phone (primary path)
 
-## File
+1. On the laptop, bind the hub to LAN and start it:
+
+```powershell
+$env:HUB_HOST = "0.0.0.0"
+npm start
+```
+
+2. On the laptop open <http://127.0.0.1:8787/apps/app.html> → **Sync** tab.
+3. Scan the QR (or copy the LAN URL) and open that URL **in Shelf** on the same Wi‑Fi.
+4. Money + Digest load live from the hub. Shelf is just the browser shell.
+
+`file://` / downloaded HTML without the hub is **preview-only**.
+
+## File / GitHub
 
 `apps/app.html`
 
@@ -18,27 +31,22 @@ Raw GitHub (after push):
 
 https://raw.githubusercontent.com/rohan123089/finance-digest/master/apps/app.html
 
-Old path `apps/shelf/shelf.html` is gone; the hub still **302**s those URLs to `/apps/app.html`. GitHub raw will **not** redirect — use the new path above.
+Prefer the hub URL above over downloading raw HTML for day-to-day use.
 
-## Open in Shelf (real path)
-
-1. Download `apps/app.html` (or load the raw URL in Shelf).
-2. Point Shelf at that file.
-3. Use **Money** and **Digest**; sync goes through Shelf APIs ↔ encrypted sync folder ↔ laptop hub.
-
-## Laptop hub (dev / live data in browser)
+## Laptop hub
 
 With `npm start`:
 
 http://127.0.0.1:8787/apps/app.html
 
-Phone on Wi‑Fi (hub API relay — laptop browser / same LAN only; phone production path is Shelf + sync folder):
+## Advanced offline folder sync
 
-http://YOUR_LAPTOP_IP:8787/apps/app.html
+Optional encrypted `sync/` pairing remains at
+<http://127.0.0.1:8787/apps/hub/pairing.html> — not required for the doorway path.
 
 ## Pairing / bank import
 
-Those still need the hub. Day-to-day Money + Digest UI is `app.html`.
+Gmail, SimpleFIN, Canvas, etc. still need the hub (**Setup** from the app when served by the hub).
 
 Rebuild after changing sources:
 

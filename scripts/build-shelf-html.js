@@ -125,6 +125,17 @@ const html = `<!doctype html>
     }
     a { color: var(--blue); }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    #phone-qr {
+      display: grid; place-items: center; margin: 12px 0;
+      padding: 12px; border-radius: 12px; background: #fff; min-height: 160px;
+    }
+    #phone-qr svg { width: 220px; height: 220px; }
+    .sync-url {
+      word-break: break-all; font-size: 13px; color: var(--text);
+      padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+      background: #0e151d; margin: 8px 0;
+    }
+    .warn-line { color: var(--warn); font-size: 13px; margin: 8px 0; }
   </style>
 </head>
 <body>
@@ -137,6 +148,7 @@ const html = `<!doctype html>
       <div class="tabs" role="tablist">
         <button type="button" class="active" data-tab="money">Money</button>
         <button type="button" data-tab="digest">Digest</button>
+        <button type="button" data-tab="sync">Sync</button>
       </div>
       <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--blue);font-size:13px;text-decoration:none">Setup</a>
       <div class="bridge" id="bridge">Starting…</div>
@@ -187,6 +199,39 @@ const html = `<!doctype html>
       </div>
       <p class="status" id="digest-status">—</p>
     </section>
+
+    <!-- SYNC (Shelf = doorway only; hub owns data) -->
+    <section class="panel" id="tab-sync">
+      <h2>Phone doorway</h2>
+      <p class="muted" id="sync-lead">
+        Shelf only opens this app. Live Money + Digest come from the laptop hub on Wi‑Fi.
+      </p>
+      <div id="sync-hub-block">
+        <p class="muted">On your phone, open Shelf and load this URL (same Wi‑Fi as the laptop):</p>
+        <div class="sync-url" id="phone-url">Loading…</div>
+        <div id="phone-qr">Loading QR…</div>
+        <p class="muted" id="sync-hint"></p>
+        <p class="muted" id="sync-meta"></p>
+        <div class="toolbar">
+          <button type="button" class="act primary" id="sync-refresh">Refresh data</button>
+          <button type="button" class="act" id="sync-reload-doorway">Reload doorway info</button>
+          <a id="sync-setup" href="/apps/hub/setup.html" class="act" style="display:inline-block;text-decoration:none;padding:6px 10px">Hub setup</a>
+        </div>
+        <p class="muted" style="margin-top:14px">
+          Advanced offline folder sync:
+          <a href="/apps/hub/pairing.html">pairing QR</a> (optional — not required for the doorway path).
+        </p>
+      </div>
+      <div id="sync-offline-block" hidden>
+        <p class="warn-line">This copy is offline preview only.</p>
+        <p class="muted">
+          On the laptop run the hub with LAN bind, open the Sync tab there, then load that URL in Shelf:
+        </p>
+        <pre class="sync-url" style="white-space:pre-wrap;margin:0">$env:HUB_HOST="0.0.0.0"
+npm start</pre>
+      </div>
+      <p class="status" id="sync-status">—</p>
+    </section>
   </div>
 
   <script>
@@ -231,6 +276,7 @@ ${mockShelf}
       btn.classList.add("active");
       document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
       document.querySelector("#tab-" + btn.dataset.tab).classList.add("on");
+      if (btn.dataset.tab === "sync") loadDoorway().catch(() => {});
     });
   });
 
@@ -477,15 +523,95 @@ ${mockShelf}
 
   function setBridgeLabel() {
     document.querySelector("#bridge").textContent = Shelf.__hub
-      ? "Laptop hub · preview (real sync is via Shelf gateway)"
+      ? (Shelf.__doorway
+        ? "Hub live · Shelf doorway"
+        : "Laptop hub · live data")
       : Shelf.__real
-        ? "Shelf gateway · push/pull sync"
+        ? "Shelf gateway · open hub URL for live data"
         : Shelf.__standalone || Shelf.__mock
-          ? "Browser preview only · open in Shelf for sync"
+          ? "Browser preview only · open hub URL in Shelf"
           : "Shelf";
     const setup = document.querySelector("#setup-link");
-    if (setup) setup.hidden = !(Shelf.__hub || location.protocol === "http:");
+    if (setup) setup.hidden = !(Shelf.__hub || location.protocol === "http:" || location.protocol === "https:");
   }
+
+  async function updateSyncStatus() {
+    const status = document.querySelector("#sync-status");
+    try {
+      const [snap, digest, tx] = await Promise.all([
+        Shelf.data.get("snapshot").catch(() => null),
+        Shelf.data.get("digest").catch(() => null),
+        Shelf.data.get("transactions").catch(() => null)
+      ]);
+      const n = (tx?.transactions || tx?.rows || []).length;
+      if (snap || digest || n) {
+        status.textContent =
+          "Live from hub · " + n + " tx · snapshot " + (snap ? "yes" : "no") +
+          " · digest " + (digest ? "yes" : "no");
+      } else {
+        status.textContent = "Connected bridge, but no hub data yet — check Setup / SimpleFIN.";
+      }
+    } catch (e) {
+      status.textContent = e.message || String(e);
+    }
+  }
+
+  async function loadDoorway() {
+    const hubBlock = document.querySelector("#sync-hub-block");
+    const offlineBlock = document.querySelector("#sync-offline-block");
+    const onHub = Boolean(Shelf.__hub) || location.protocol === "http:" || location.protocol === "https:";
+    if (!onHub || location.protocol === "file:") {
+      hubBlock.hidden = true;
+      offlineBlock.hidden = false;
+      document.querySelector("#sync-status").textContent = "Offline file — use the hub Sync tab URL in Shelf.";
+      return;
+    }
+    hubBlock.hidden = false;
+    offlineBlock.hidden = true;
+    try {
+      const res = await fetch("/api/sync/phone");
+      const card = await res.json();
+      if (!res.ok) throw new Error(card.error || "Doorway info failed");
+      const urlEl = document.querySelector("#phone-url");
+      const qr = document.querySelector("#phone-qr");
+      const hint = document.querySelector("#sync-hint");
+      const meta = document.querySelector("#sync-meta");
+      if (!card.lanBound) {
+        urlEl.textContent = card.localUrl + " (laptop only)";
+        qr.innerHTML = '<p class="muted" style="color:#333;padding:12px;text-align:center">LAN off — set HUB_HOST=0.0.0.0 and restart the hub</p>';
+      } else if (card.preferredUrl) {
+        urlEl.textContent = card.preferredUrl;
+        qr.innerHTML = card.svg || "";
+      } else {
+        urlEl.textContent = "No LAN IPv4 address found";
+        qr.textContent = "";
+      }
+      hint.textContent = card.hint || "";
+      meta.textContent =
+        "Fingerprint " + (card.fingerprint || "—") +
+        (card.urls && card.urls.length > 1 ? " · also " + card.urls.slice(1).join(", ") : "");
+      await updateSyncStatus();
+    } catch (e) {
+      document.querySelector("#phone-url").textContent = "Could not load doorway info";
+      document.querySelector("#phone-qr").textContent = "";
+      document.querySelector("#sync-status").textContent = e.message || String(e);
+    }
+  }
+
+  document.querySelector("#sync-refresh")?.addEventListener("click", async () => {
+    try {
+      await refreshMoney();
+      await loadDigest();
+      await updateSyncStatus();
+      document.querySelector("#sync-status").textContent += " · refreshed";
+    } catch (e) {
+      document.querySelector("#sync-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#sync-reload-doorway")?.addEventListener("click", () => {
+    loadDoorway().catch(() => {});
+  });
 
   async function boot() {
     if (!window.Shelf || typeof Shelf.data?.get !== "function") {
@@ -494,12 +620,16 @@ ${mockShelf}
     setBridgeLabel();
     await refreshMoney();
     await loadDigest();
+    if (document.querySelector("#tab-sync")?.classList.contains("on")) {
+      await loadDoorway();
+    }
   }
 
   window.addEventListener("shelf-hub-ready", () => {
     setBridgeLabel();
     refreshMoney().catch(() => {});
     loadDigest().catch(() => {});
+    loadDoorway().catch(() => {});
   });
 
   boot().catch((error) => {
