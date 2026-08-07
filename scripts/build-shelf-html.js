@@ -410,10 +410,50 @@ ${hubShelf}
     loadStartedAt.t = 0;
   }
 
+  function isValidSnapshot(snap) {
+    return Boolean(snap && snap.unchanged !== true && typeof snap.netWorth === "number");
+  }
+
+  function slimSnapshot(snap) {
+    if (!isValidSnapshot(snap)) return null;
+    const safe = snap.safeToSpend || {};
+    return {
+      kind: "snapshot",
+      netWorth: snap.netWorth,
+      liquid: snap.liquid,
+      invested: snap.invested,
+      owed: snap.owed,
+      runwayMonths: snap.runwayMonths,
+      savingsRatePct: snap.savingsRatePct,
+      recurringMonthly: snap.recurringMonthly,
+      safeToSpend: {
+        period: safe.period,
+        periodSource: safe.periodSource,
+        nextPayday: safe.nextPayday,
+        horizonDays: safe.horizonDays,
+        amount: safe.amount,
+        income: safe.income,
+        weeklyIncome: safe.weeklyIncome,
+        committed: safe.committed,
+        savingsTarget: safe.savingsTarget,
+        spent: safe.spent,
+        remaining: safe.remaining
+      }
+    };
+  }
+
   function renderMoney() {
     const snap = state.snapshot;
-    if (!snap) {
+    if (!isValidSnapshot(snap)) {
       document.querySelector("#safe-detail").textContent = "No snapshot yet — sync with the hub";
+      document.querySelector("#safe-value").textContent = "—";
+      document.querySelector("#m-nw").textContent = "—";
+      document.querySelector("#m-liq").textContent = "—";
+      document.querySelector("#m-owed").textContent = "—";
+      document.querySelector("#m-run").textContent = "—";
+      if (!state.transactions.length) {
+        document.querySelector("#tx-list").innerHTML = '<div class="empty">No transactions synced</div>';
+      }
       return;
     }
     const safe = snap.safeToSpend || {};
@@ -562,6 +602,7 @@ ${hubShelf}
   async function refreshMoney() {
     const cache = readCache() || {};
     const hasCache = Array.isArray(cache.transactions) && cache.transactions.length > 0;
+    const hasSnap = isValidSnapshot(cache.snapshot);
 
     setProgress(
       hasCache ? "Pulling new/changed transactions…" : "Loading all transactions (first pull)…",
@@ -578,17 +619,22 @@ ${hubShelf}
       rows = txPayload?.transactions ?? txPayload?.rows ?? [];
     }
 
-    setProgress(
-      hasCache && cache.snapshot ? "Checking snapshot…" : "Computing snapshot…",
-      2,
-      3
-    );
-    const snap = await Shelf.data.get("snapshot", {
-      txCursor: txPayload?.cursor || cache.txCursor || "",
-      settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
-      asOfDate: txPayload?.asOfDate || cache.asOfDate || ""
-    });
-    const snapshot = snap?.unchanged && cache.snapshot ? cache.snapshot : snap;
+    setProgress(hasSnap ? "Checking snapshot…" : "Computing snapshot…", 2, 3);
+    let snap = await Shelf.data.get("snapshot", hasSnap
+      ? {
+          txCursor: txPayload?.cursor || cache.txCursor || "",
+          settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+          asOfDate: txPayload?.asOfDate || cache.asOfDate || ""
+        }
+      : {});
+    // unchanged with no local snapshot body → force a full compute
+    if (snap?.unchanged && !hasSnap) {
+      snap = await Shelf.data.get("snapshot", {});
+    }
+    const snapshot = snap?.unchanged && hasSnap ? cache.snapshot : snap;
+    if (!isValidSnapshot(snapshot)) {
+      throw new Error("Snapshot missing from hub — try hard-refresh");
+    }
 
     const billsPayload = await (Shelf.bills?.list
       ? Shelf.bills.list()
@@ -596,11 +642,7 @@ ${hubShelf}
     ).catch(() => null);
 
     state.transactions = rows.map((r) => ({ ...r }));
-    state.snapshot = snapshot && snapshot.kind ? snapshot : snapshot;
-    if (state.snapshot && state.snapshot.unchanged) {
-      // shouldn't happen if we merged cache above
-      state.snapshot = cache.snapshot;
-    }
+    state.snapshot = snapshot;
     state.bills = billsPayload?.bills || [];
     state.billsUpcoming = billsPayload?.upcoming || [];
     const accounts = txPayload?.accounts || cache.accounts || [];
@@ -618,7 +660,7 @@ ${hubShelf}
     writeCache({
       transactions: rows,
       accounts,
-      snapshot: state.snapshot,
+      snapshot: slimSnapshot(snapshot),
       txCursor: txPayload?.cursor || cache.txCursor || "",
       settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
       asOfDate: txPayload?.asOfDate || cache.asOfDate || "",
@@ -898,15 +940,19 @@ ${hubShelf}
     const cache = readCache();
     loadStartedAt.t = Date.now();
     setProgress("Connecting to hub…", 0, 3);
-    if (cache?.snapshot && Array.isArray(cache.transactions)) {
-      state.transactions = cache.transactions.map((r) => ({ ...r }));
-      state.snapshot = cache.snapshot;
+    if (cache && (!Array.isArray(cache.transactions) || !isValidSnapshot(cache.snapshot))) {
+      try { localStorage.removeItem(CACHE_KEY); } catch (_e) {}
+    }
+    const warm = readCache();
+    if (isValidSnapshot(warm?.snapshot) && Array.isArray(warm.transactions)) {
+      state.transactions = warm.transactions.map((r) => ({ ...r }));
+      state.snapshot = warm.snapshot;
       state.labels = Object.fromEntries(
-        (cache.accounts || []).map((a) => [a.id, a.label || a.id])
+        (warm.accounts || []).map((a) => [a.id, a.label || a.id])
       );
       renderMoney();
       if (bridge) bridge.textContent = "Showing cached data · updating…";
-      if (cache.digest) renderDigestPayload(cache.digest).catch(() => {});
+      if (warm.digest) renderDigestPayload(warm.digest).catch(() => {});
     } else if (bridge) {
       bridge.textContent = "Connecting to hub…";
     }
