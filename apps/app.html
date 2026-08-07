@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Life · Money & Digest</title>
   <style>
     :root {
@@ -24,7 +24,11 @@
       color: var(--text);
       font: 14px/1.4 system-ui, "Segoe UI", sans-serif;
     }
-    .shell { max-width: 720px; margin: 0 auto; padding: 12px 14px 40px; }
+    .shell {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: calc(32px + env(safe-area-inset-top, 0px)) 14px 40px;
+    }
     .top {
       display: flex; flex-wrap: wrap; gap: 10px;
       align-items: center; justify-content: space-between;
@@ -199,12 +203,21 @@
         </p>
       </div>
       <div id="sync-offline-block" hidden>
-        <p class="warn-line">This copy is offline preview only.</p>
+        <p class="warn-line">Not connected to the laptop hub yet.</p>
         <p class="muted">
-          On the laptop run the hub with LAN bind, open the Sync tab there, then load that URL in Shelf:
+          A downloaded / GitHub copy is preview-only. On the laptop keep the hub running with
+          <code>HUB_HOST=0.0.0.0</code>, open Sync there, then paste that LAN URL here and open it in Shelf:
         </p>
-        <pre class="sync-url" style="white-space:pre-wrap;margin:0">$env:HUB_HOST="0.0.0.0"
-npm start</pre>
+        <label>Hub app URL
+          <input id="hub-url-input" autocomplete="off" spellcheck="false"
+            placeholder="http://192.168.x.x:8787/apps/app.html">
+        </label>
+        <div class="toolbar">
+          <button type="button" class="act primary" id="hub-url-open">Open hub in Shelf</button>
+        </div>
+        <p class="muted" style="margin-top:10px">
+          Example: <code>http://192.168.86.23:8787/apps/app.html</code>
+        </p>
       </div>
       <p class="status" id="sync-status">—</p>
     </section>
@@ -2483,14 +2496,36 @@ npm start</pre>
     }
   }
 
+  async function probeLiveHub() {
+    if (Shelf && Shelf.__hub) return true;
+    if (location.protocol === "file:") return false;
+    try {
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 900) : null;
+      const res = await fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (!res.ok) return false;
+      const body = await res.json().catch(() => null);
+      return Boolean(body && body.ok);
+    } catch (_error) {
+      return false;
+    }
+  }
+
   async function loadDoorway() {
     const hubBlock = document.querySelector("#sync-hub-block");
     const offlineBlock = document.querySelector("#sync-offline-block");
-    const onHub = Boolean(Shelf.__hub) || location.protocol === "http:" || location.protocol === "https:";
-    if (!onHub || location.protocol === "file:") {
+    const live = await probeLiveHub();
+    if (!live) {
       hubBlock.hidden = true;
       offlineBlock.hidden = false;
-      document.querySelector("#sync-status").textContent = "Offline file — use the hub Sync tab URL in Shelf.";
+      const input = document.querySelector("#hub-url-input");
+      try {
+        const saved = localStorage.getItem("life.hubAppUrl");
+        if (saved && input && !input.value) input.value = saved;
+      } catch (_e) {}
+      document.querySelector("#sync-status").textContent =
+        "Preview only until you open the laptop hub URL in Shelf.";
       return;
     }
     hubBlock.hidden = false;
@@ -2509,6 +2544,7 @@ npm start</pre>
       } else if (card.preferredUrl) {
         urlEl.textContent = card.preferredUrl;
         qr.innerHTML = card.svg || "";
+        try { localStorage.setItem("life.hubAppUrl", card.preferredUrl); } catch (_e) {}
       } else {
         urlEl.textContent = "No LAN IPv4 address found";
         qr.textContent = "";
@@ -2524,6 +2560,21 @@ npm start</pre>
       document.querySelector("#sync-status").textContent = e.message || String(e);
     }
   }
+
+  document.querySelector("#hub-url-open")?.addEventListener("click", () => {
+    const input = document.querySelector("#hub-url-input");
+    let url = (input?.value || "").trim();
+    if (!url) {
+      document.querySelector("#sync-status").textContent = "Paste the hub URL from the laptop Sync tab.";
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+    if (!/\/apps\/app\.html/i.test(url) && !/\/apps\/app\.html\?/i.test(url)) {
+      url = url.replace(/\/+$/, "") + "/apps/app.html";
+    }
+    try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
+    location.href = url;
+  });
 
   document.querySelector("#sync-refresh")?.addEventListener("click", async () => {
     try {
