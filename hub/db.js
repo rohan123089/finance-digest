@@ -793,6 +793,7 @@ function createAccount(db, account) {
     throw new Error(`Account already exists: ${account.id}`);
   }
   const created = upsertAccountRow(db, account);
+  bumpSettingsStamp(db);
   if (typeof db._persist === "function") db._persist();
   return created;
 }
@@ -813,6 +814,7 @@ function updateAccount(db, id, patch) {
     holdings: patch.holdings !== undefined ? patch.holdings : existing.holdings
   };
   const updated = upsertAccountRow(db, next);
+  bumpSettingsStamp(db);
   if (typeof db._persist === "function") db._persist();
   return updated;
 }
@@ -909,6 +911,45 @@ function listTransactions(db) {
     .map(rowToTransaction);
 }
 
+/** Rows changed after `since` (ISO timestamp). Empty since → full list. */
+function listTransactionsSince(db, since) {
+  const cursor = String(since || "").trim();
+  if (!cursor) return listTransactions(db);
+  return db
+    .prepare(
+      `SELECT * FROM transactions
+       WHERE updated_at > ? OR IFNULL(committed_at, '') > ?
+       ORDER BY date DESC, id DESC`
+    )
+    .all(cursor, cursor)
+    .map(rowToTransaction);
+}
+
+function getDataCursors(db) {
+  const tx = db
+    .prepare("SELECT MAX(updated_at) AS m, COUNT(*) AS c FROM transactions")
+    .get();
+  const bills = db.prepare("SELECT MAX(updated_at) AS m FROM bills").get();
+  let sync = { m: null };
+  try {
+    sync = db.prepare("SELECT MAX(updated_at) AS m FROM sync_items").get() || sync;
+  } catch (_error) {
+    // table may be absent in older fixtures
+  }
+  return {
+    txCursor: tx?.m || "",
+    txCount: Number(tx?.c) || 0,
+    billsCursor: bills?.m || "",
+    syncCursor: sync?.m || "",
+    settingsStamp: getMeta(db, "settingsStamp", "0"),
+    asOfDate: getMeta(db, "asOfDate", Model.todayIso())
+  };
+}
+
+function bumpSettingsStamp(db) {
+  setMeta(db, "settingsStamp", new Date().toISOString());
+}
+
 function getSettings(db) {
   const maps = getAccountMaps(db);
   return {
@@ -932,6 +973,7 @@ function saveSettings(db, settings) {
   if (settings.weeklySavingsTarget != null) {
     setMeta(db, "weeklySavingsTarget", settings.weeklySavingsTarget);
   }
+  bumpSettingsStamp(db);
   if (typeof db._persist === "function") db._persist();
 }
 
@@ -1647,6 +1689,9 @@ module.exports = {
   updateAccount,
   findAccountBySimplefinId,
   listTransactions,
+  listTransactionsSince,
+  getDataCursors,
+  bumpSettingsStamp,
   getSettings,
   saveSettings,
   purgeDemoTransactions,

@@ -185,14 +185,24 @@ function createServer(db, options = {}) {
 
         if (req.method === "GET" && pathname === "/api/transactions") {
           const settings = dbApi.getSettings(db);
+          const cursors = dbApi.getDataCursors(db);
+          const since = url.searchParams.get("since") || "";
+          const rows = since
+            ? dbApi.listTransactionsSince(db, since)
+            : dbApi.listTransactions(db);
           return sendJson(res, 200, {
             kind: "transactions",
-            rows: dbApi.listTransactions(db),
+            mode: since ? "delta" : "full",
+            rows,
+            changed: rows.length,
             asOfDate: settings.asOfDate,
             settings: {
               weeklySavingsTarget: settings.weeklySavingsTarget
             },
-            accounts: dbApi.listAccounts(db)
+            accounts: dbApi.listAccounts(db),
+            cursor: cursors.txCursor,
+            txCount: cursors.txCount,
+            settingsStamp: cursors.settingsStamp
           });
         }
 
@@ -541,32 +551,48 @@ function createServer(db, options = {}) {
         if (req.method === "POST" && pathname === "/api/groupme/client") {
           const body = await readBody(req);
           try {
-            const groupIds =
-              body.groupIds != null
+            const token = String(body?.token || "").trim();
+            let groupIds =
+              body?.groupIds != null
                 ? body.groupIds
-                : body.groupId != null
+                : body?.groupId != null
                   ? body.groupId
                   : null;
-            if (body.token && groupIds != null) {
+            if (
+              (groupIds == null ||
+                (Array.isArray(groupIds) && groupIds.length === 0)) &&
+              Array.isArray(body?.groups) &&
+              body.groups.length
+            ) {
+              groupIds = body.groups.map((row) => row?.id).filter(Boolean);
+            }
+            const hasGroups =
+              groupIds != null &&
+              !(Array.isArray(groupIds) && groupIds.length === 0) &&
+              !(typeof groupIds === "string" && !String(groupIds).trim());
+
+            if (token && hasGroups) {
               const result = await groupme.saveCredentials(
-                body.token,
+                token,
                 groupIds,
                 body.groups || body.meta
               );
-              return sendJson(res, 200, result);
+              return sendJson(res, 200, { ...result, ...(await groupme.getStatus()) });
             }
-            if (body.token && groupIds == null) {
-              const result = await groupme.saveToken(body.token);
-              return sendJson(res, 200, result);
+            if (token && !hasGroups) {
+              const result = await groupme.saveToken(token);
+              return sendJson(res, 200, { ...result, ...(await groupme.getStatus()) });
             }
-            if (groupIds != null && !body.token) {
+            if (!token && hasGroups) {
               const result = await groupme.saveGroupIds(
                 groupIds,
                 body.groups || body.meta
               );
-              return sendJson(res, 200, result);
+              return sendJson(res, 200, { ...result, ...(await groupme.getStatus()) });
             }
-            throw new Error("Provide token and/or groupIds");
+            throw new Error(
+              "Paste your GroupMe access token and select at least one group"
+            );
           } catch (error) {
             return sendJson(res, 400, { error: error.message || String(error) });
           }
@@ -610,10 +636,28 @@ function createServer(db, options = {}) {
         }
 
         if (req.method === "GET" && pathname === "/api/snapshot") {
+          const cursors = dbApi.getDataCursors(db);
+          const txCursor = url.searchParams.get("txCursor") || "";
+          const settingsStamp = url.searchParams.get("settingsStamp") || "";
+          const asOfDate = url.searchParams.get("asOfDate") || "";
+          if (
+            txCursor &&
+            txCursor === cursors.txCursor &&
+            settingsStamp === cursors.settingsStamp &&
+            (!asOfDate || asOfDate === cursors.asOfDate)
+          ) {
+            return sendJson(res, 200, {
+              kind: "snapshot",
+              unchanged: true,
+              cursor: cursors
+            });
+          }
           const snapshot = dbApi.computeLiveSnapshot(db);
           return sendJson(res, 200, {
             kind: "snapshot",
-            ...dbApi.redactSnapshot(snapshot)
+            unchanged: false,
+            ...dbApi.redactSnapshot(snapshot),
+            cursor: cursors
           });
         }
 
@@ -632,8 +676,11 @@ function createServer(db, options = {}) {
             });
           }
           const existingIds = new Set(dbApi.listSyncItems(db).map((item) => item.id));
+          let expanded = 0;
           items.forEach((item) => {
             dbApi.upsertSyncItem(db, item);
+            const lifeSignals = sync.expandIncomingLifeItem(db, item);
+            expanded += lifeSignals.length;
             if (existingIds.has(item.id)) return;
             if (item.type === "action.transaction.update" && item.data) {
               dbApi.commitTransactions(db, [item.data]);
@@ -647,6 +694,7 @@ function createServer(db, options = {}) {
           await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, {
             queued: items.length,
+            expanded,
             total: dbApi.listSyncItems(db).length
           });
         }
@@ -658,11 +706,34 @@ function createServer(db, options = {}) {
             processed,
             kind: "digest",
             today: digest.today,
+            watching: digest.watching || [],
             reading: digest.reading,
             junk: digest.junk,
             generatedAt: digest.generatedAt,
             asOfDate: digest.asOfDate
           });
+        }
+
+        if (req.method === "GET" && pathname === "/api/calendar/ics") {
+          const itemId = url.searchParams.get("itemId");
+          if (!itemId) {
+            return sendJson(res, 400, { error: "itemId is required" });
+          }
+          const ics = sync.icsForItemId(db, itemId);
+          if (!ics) {
+            return sendJson(res, 404, {
+              error: "No calendar event for that item (need a start or due date)"
+            });
+          }
+          const safeName = String(itemId).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
+          res.writeHead(200, {
+            "Content-Type": "text/calendar; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${safeName}.ics"`,
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": "*"
+          });
+          res.end(ics);
+          return;
         }
 
         if (req.method === "GET" && pathname === "/api/sync/pairing") {
@@ -687,15 +758,33 @@ function createServer(db, options = {}) {
         }
 
         if (req.method === "GET" && pathname === "/api/digest") {
+          const cursors = dbApi.getDataCursors(db);
+          const syncCursor = url.searchParams.get("syncCursor") || "";
+          const billsCursor = url.searchParams.get("billsCursor") || "";
+          const asOfDate = url.searchParams.get("asOfDate") || "";
+          if (
+            syncCursor &&
+            syncCursor === cursors.syncCursor &&
+            billsCursor === cursors.billsCursor &&
+            (!asOfDate || asOfDate === cursors.asOfDate)
+          ) {
+            return sendJson(res, 200, {
+              kind: "digest",
+              unchanged: true,
+              cursor: cursors
+            });
+          }
           const digest = sync.buildDigest(db);
           return sendJson(res, 200, {
             kind: "digest",
+            unchanged: false,
             today: digest.today,
             watching: digest.watching || [],
             reading: digest.reading,
             junk: digest.junk,
             generatedAt: digest.generatedAt,
-            asOfDate: digest.asOfDate
+            asOfDate: digest.asOfDate,
+            cursor: cursors
           });
         }
 

@@ -132,6 +132,7 @@
       </div>
       <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--blue);font-size:13px;text-decoration:none">Setup</a>
       <div class="bridge" id="bridge">Starting…</div>
+      <div class="bridge" id="load-progress" hidden></div>
     </div>
 
     <div id="boot-error" class="empty" hidden></div>
@@ -314,11 +315,18 @@
       __doorway: Boolean(keepNative),
       __version: 1,
       data: {
-        async get(kind) {
+        async get(kind, opts = {}) {
           if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
             throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
           }
-          const path =
+          const qs = new URLSearchParams();
+          if (opts.since) qs.set("since", opts.since);
+          if (opts.txCursor) qs.set("txCursor", opts.txCursor);
+          if (opts.settingsStamp) qs.set("settingsStamp", opts.settingsStamp);
+          if (opts.asOfDate) qs.set("asOfDate", opts.asOfDate);
+          if (opts.syncCursor) qs.set("syncCursor", opts.syncCursor);
+          if (opts.billsCursor) qs.set("billsCursor", opts.billsCursor);
+          const base =
             kind === "accounts"
               ? "/api/accounts"
               : kind === "bills"
@@ -326,6 +334,7 @@
                 : kind === "rewards"
                   ? "/api/rewards"
                   : `/api/${encodeURIComponent(kind)}`;
+          const path = qs.toString() ? `${base}?${qs}` : base;
           const payload = await request(path);
           if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
             payload.transactions = payload.rows;
@@ -561,6 +570,80 @@
   }
 
   const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
+  const CACHE_KEY = "life.hubDataCache.v1";
+  const loadStartedAt = { t: 0, step: 0, steps: 3 };
+
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && parsed.v === 1 ? parsed : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function writeCache(patch) {
+    try {
+      const prev = readCache() || { v: 1 };
+      const next = { ...prev, ...patch, v: 1, savedAt: new Date().toISOString() };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+      return next;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function mergeTransactions(existing, deltaRows) {
+    const map = new Map((existing || []).map((row) => [row.id, row]));
+    (deltaRows || []).forEach((row) => map.set(row.id, row));
+    return [...map.values()].sort((a, b) => {
+      if (a.date === b.date) return String(b.id).localeCompare(String(a.id));
+      return String(b.date).localeCompare(String(a.date));
+    });
+  }
+
+  function setProgress(stepLabel, stepIndex, totalSteps) {
+    const el = document.querySelector("#load-progress");
+    const bridge = document.querySelector("#bridge");
+    if (!el) return;
+    el.hidden = false;
+    loadStartedAt.step = stepIndex;
+    loadStartedAt.steps = totalSteps || loadStartedAt.steps || 3;
+    if (!loadStartedAt.t) loadStartedAt.t = Date.now();
+    const elapsed = (Date.now() - loadStartedAt.t) / 1000;
+    let eta = "";
+    if (stepIndex > 0 && stepIndex < loadStartedAt.steps) {
+      const per = elapsed / stepIndex;
+      const left = Math.max(0, Math.ceil(per * (loadStartedAt.steps - stepIndex)));
+      eta = " · ~" + left + "s left";
+    } else if (stepIndex >= loadStartedAt.steps) {
+      eta = " · done in " + Math.max(1, Math.round(elapsed)) + "s";
+    }
+    const text =
+      "Step " + stepIndex + "/" + loadStartedAt.steps + " · " + stepLabel + eta;
+    el.textContent = text;
+    if (bridge && /Loading|Connecting|Starting/i.test(bridge.textContent || "")) {
+      bridge.textContent = stepLabel;
+    }
+  }
+
+  function clearProgress(finalMsg) {
+    const el = document.querySelector("#load-progress");
+    if (!el) return;
+    if (finalMsg) {
+      el.hidden = false;
+      el.textContent = finalMsg;
+      setTimeout(() => {
+        if (el.textContent === finalMsg) el.hidden = true;
+      }, 4000);
+    } else {
+      el.hidden = true;
+      el.textContent = "";
+    }
+    loadStartedAt.t = 0;
+  }
 
   function renderMoney() {
     const snap = state.snapshot;
@@ -648,7 +731,34 @@
   }
 
   async function loadDigest() {
-    const digest = await Shelf.data.get("digest");
+    const cache = readCache() || {};
+    setProgress(
+      cache.digest ? "Checking digest for changes…" : "Loading digest (first pull)…",
+      3,
+      3
+    );
+    const digest = await Shelf.data.get("digest", {
+      syncCursor: cache.syncCursor || "",
+      billsCursor: cache.billsCursor || "",
+      asOfDate: cache.asOfDate || ""
+    });
+    if (digest?.unchanged && cache.digest) {
+      await renderDigestPayload(cache.digest);
+      return cache.digest;
+    }
+    await renderDigestPayload(digest);
+    if (digest && !digest.unchanged) {
+      writeCache({
+        digest,
+        syncCursor: digest.cursor?.syncCursor || cache.syncCursor || "",
+        billsCursor: digest.cursor?.billsCursor || cache.billsCursor || "",
+        asOfDate: digest.asOfDate || digest.cursor?.asOfDate || cache.asOfDate || ""
+      });
+    }
+    return digest;
+  }
+
+  async function renderDigestPayload(digest) {
     if (!digest) {
       document.querySelector("#digest-status").textContent = "No digest yet";
       fillList("today", [], null, "Nothing today");
@@ -685,24 +795,70 @@
   }
 
   async function refreshMoney() {
-    const [txPayload, snap, billsPayload] = await Promise.all([
-      Shelf.data.get("transactions"),
-      Shelf.data.get("snapshot"),
-      (Shelf.bills?.list ? Shelf.bills.list() : Shelf.data.get("bills")).catch(() => null)
-    ]);
-    const rows = txPayload?.transactions ?? txPayload?.rows ?? [];
+    const cache = readCache() || {};
+    const hasCache = Array.isArray(cache.transactions) && cache.transactions.length > 0;
+
+    setProgress(
+      hasCache ? "Pulling new/changed transactions…" : "Loading all transactions (first pull)…",
+      1,
+      3
+    );
+    const txPayload = await Shelf.data.get("transactions", {
+      since: hasCache ? cache.txCursor || "" : ""
+    });
+    let rows;
+    if (txPayload?.mode === "delta" && hasCache) {
+      rows = mergeTransactions(cache.transactions, txPayload.transactions || txPayload.rows || []);
+    } else {
+      rows = txPayload?.transactions ?? txPayload?.rows ?? [];
+    }
+
+    setProgress(
+      hasCache && cache.snapshot ? "Checking snapshot…" : "Computing snapshot…",
+      2,
+      3
+    );
+    const snap = await Shelf.data.get("snapshot", {
+      txCursor: txPayload?.cursor || cache.txCursor || "",
+      settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+      asOfDate: txPayload?.asOfDate || cache.asOfDate || ""
+    });
+    const snapshot = snap?.unchanged && cache.snapshot ? cache.snapshot : snap;
+
+    const billsPayload = await (Shelf.bills?.list
+      ? Shelf.bills.list()
+      : Shelf.data.get("bills")
+    ).catch(() => null);
+
     state.transactions = rows.map((r) => ({ ...r }));
-    state.snapshot = snap;
+    state.snapshot = snapshot && snapshot.kind ? snapshot : snapshot;
+    if (state.snapshot && state.snapshot.unchanged) {
+      // shouldn't happen if we merged cache above
+      state.snapshot = cache.snapshot;
+    }
     state.bills = billsPayload?.bills || [];
     state.billsUpcoming = billsPayload?.upcoming || [];
-    const accounts = txPayload?.accounts || [];
+    const accounts = txPayload?.accounts || cache.accounts || [];
     state.labels = Object.fromEntries(accounts.map((a) => [a.id, a.label || a.id]));
-    if (!Object.keys(state.labels).length && snap?.balances) {
-      Object.keys(snap.balances).forEach((id) => { state.labels[id] = id; });
+    if (!Object.keys(state.labels).length && state.snapshot?.balances) {
+      Object.keys(state.snapshot.balances).forEach((id) => { state.labels[id] = id; });
     }
     renderMoney();
+    const mode = txPayload?.mode === "delta" && hasCache ? "delta" : "full";
     document.querySelector("#money-status").textContent =
-      rows.length + " transactions · as of " + (txPayload?.asOfDate || "—");
+      rows.length + " transactions · " + mode + " pull" +
+      (txPayload?.changed != null && mode === "delta" ? " · " + txPayload.changed + " changed" : "") +
+      " · as of " + (txPayload?.asOfDate || "—");
+
+    writeCache({
+      transactions: rows,
+      accounts,
+      snapshot: state.snapshot,
+      txCursor: txPayload?.cursor || cache.txCursor || "",
+      settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+      asOfDate: txPayload?.asOfDate || cache.asOfDate || "",
+      txCount: txPayload?.txCount || rows.length
+    });
   }
 
   document.querySelector("#bill-add").addEventListener("click", async () => {
@@ -973,20 +1129,37 @@
 
   async function boot() {
     const bridge = document.querySelector("#bridge");
-    if (bridge) bridge.textContent = "Connecting to hub…";
+    const cache = readCache();
+    if (cache?.snapshot && Array.isArray(cache.transactions)) {
+      state.transactions = cache.transactions.map((r) => ({ ...r }));
+      state.snapshot = cache.snapshot;
+      state.labels = Object.fromEntries(
+        (cache.accounts || []).map((a) => [a.id, a.label || a.id])
+      );
+      renderMoney();
+      if (bridge) bridge.textContent = "Showing cached data · updating…";
+      if (cache.digest) renderDigestPayload(cache.digest).catch(() => {});
+    } else if (bridge) {
+      bridge.textContent = "Connecting to hub…";
+    }
+    loadStartedAt.t = Date.now();
     await waitForShelf(12000);
     setBridgeLabel();
     try {
-      await withTimeout(refreshMoney(), 15000, "Money load");
+      await withTimeout(refreshMoney(), 20000, "Money load");
     } catch (e) {
       document.querySelector("#money-status").textContent = e.message || String(e);
       document.querySelector("#safe-detail").textContent = "Hub data load failed — check hub is running";
     }
     try {
-      await withTimeout(loadDigest(), 15000, "Digest load");
+      await withTimeout(loadDigest(), 20000, "Digest load");
     } catch (e) {
       document.querySelector("#digest-status").textContent = e.message || String(e);
     }
+    const elapsed = Math.max(1, Math.round((Date.now() - (loadStartedAt.t || Date.now())) / 1000));
+    const mode = readCache()?.txCursor ? "delta-ready" : "full";
+    clearProgress("Caught up in " + elapsed + "s · next opens use changes only");
+    setBridgeLabel();
     if (document.querySelector("#tab-sync")?.classList.contains("on")) {
       await loadDoorway().catch(() => {});
     }

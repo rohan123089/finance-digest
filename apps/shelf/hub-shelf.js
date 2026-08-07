@@ -61,11 +61,18 @@
       __doorway: Boolean(keepNative),
       __version: 1,
       data: {
-        async get(kind) {
+        async get(kind, opts = {}) {
           if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
             throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
           }
-          const path =
+          const qs = new URLSearchParams();
+          if (opts.since) qs.set("since", opts.since);
+          if (opts.txCursor) qs.set("txCursor", opts.txCursor);
+          if (opts.settingsStamp) qs.set("settingsStamp", opts.settingsStamp);
+          if (opts.asOfDate) qs.set("asOfDate", opts.asOfDate);
+          if (opts.syncCursor) qs.set("syncCursor", opts.syncCursor);
+          if (opts.billsCursor) qs.set("billsCursor", opts.billsCursor);
+          const base =
             kind === "accounts"
               ? "/api/accounts"
               : kind === "bills"
@@ -73,6 +80,7 @@
                 : kind === "rewards"
                   ? "/api/rewards"
                   : `/api/${encodeURIComponent(kind)}`;
+          const path = qs.toString() ? `${base}?${qs}` : base;
           const payload = await request(path);
           if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
             payload.transactions = payload.rows;
