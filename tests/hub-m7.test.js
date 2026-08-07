@@ -97,6 +97,8 @@ async function main() {
   assert.equal(statement[0].type, "signal.task");
   assert.equal(statement[0].data.kind, "import.statement");
   assert.equal(statement[0].data.accountId, "uwcu-checking");
+  assert.match(statement[0].data.title, /UWCU PDF statement/i);
+  assert.equal(statement[0].data.preferredFormat, "pdf");
 
   const chat = life.extractFromChat(
     {

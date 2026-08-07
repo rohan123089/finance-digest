@@ -16,7 +16,10 @@ function without(id) {
 }
 
 function snapshot(rows = transactions) {
-  return Model.computeSnapshot(rows, { asOfDate: "2026-08-05" });
+  return Model.computeSnapshot(rows, {
+    asOfDate: "2026-08-05",
+    ...Model.SAMPLE_FIXTURE
+  });
 }
 
 assert.equal(raw.length, 25, "sample data has 25 rows");
@@ -46,7 +49,11 @@ assert.equal(withSavingsTransfer.liquid, withoutExternalExpense.liquid);
 assert.equal(withSavingsTransfer.invested, withoutExternalExpense.invested);
 assert.equal(withSavingsTransfer.owed - withoutExternalExpense.owed, 86.25);
 assert.equal(withSavingsTransfer.netWorth - withoutExternalExpense.netWorth, -86.25);
-assert.equal(withSavingsTransfer.spendingByCategory.dining - withoutExternalExpense.spendingByCategory.dining, 86.25);
+assert.equal(
+  withSavingsTransfer.spendingByCategoryAll.dining -
+    withoutExternalExpense.spendingByCategoryAll.dining,
+  86.25
+);
 
 const withoutReimbursement = snapshot(without("tx-017"));
 assert.equal(withSavingsTransfer.owed - withoutReimbursement.owed, -50);

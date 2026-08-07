@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gmail connect</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(720px, 94vw); margin: 0 auto; padding: 28px 0 48px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    section {
+      border: 1px solid #283544;
+      border-radius: 12px;
+      background: #121922;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    h2 { margin: 0 0 10px; font-size: 15px; }
+    label { display: block; color: #91a0ad; font-size: 12px; margin: 10px 0 6px; }
+    input, button, textarea, code {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid #283544;
+      background: #18212c;
+      color: #edf3f8;
+      padding: 8px 10px;
+    }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    textarea { min-height: 64px; }
+    button { cursor: pointer; }
+    button.primary {
+      background: #5ee0a0;
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    button.danger { border-color: #7b3030; color: #ff9b9b; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .meta { color: #91a0ad; font-size: 12px; margin-top: 10px; }
+    .error { color: #ff7b7b; }
+    .ok { color: #5ee0a0; }
+    ol { margin: 0; padding-left: 18px; color: #c5d0d8; }
+    li { margin: 6px 0; }
+    code {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .pill.on { background: #143528; color: #5ee0a0; }
+    .pill.off { background: #2a1c1c; color: #ff9b9b; }
+    a { color: #74b9ff; }
+  </style>
+</head>
+<body>
+  <main>
+    <p style="margin:0 0 16px"><a href="/apps/hub/setup.html" style="color:#74b9ff;text-decoration:none">← Setup</a></p>
+    <h1>Gmail</h1>
+    <p class="sub">
+      Connect a dedicated Gmail (or your main one) so the hub can pull statements,
+      deadlines, and reading links into Digest. Laptop-only — secrets stay in the OS keychain.
+    </p>
+
+    <section>
+      <h2>Status</h2>
+      <div id="status-pills"></div>
+      <div class="meta" id="status-detail">Loading…</div>
+    </section>
+
+    <section>
+      <h2>1 · Google Cloud (one-time)</h2>
+      <ol>
+        <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer">Google Cloud Console</a> → create/select a project.</li>
+        <li>Enable <strong>Gmail API</strong>.</li>
+        <li>OAuth consent screen → External → add your new Gmail as a <strong>test user</strong>.</li>
+        <li>Credentials → Create OAuth client → type <strong>Web application</strong>.</li>
+        <li>Add this exact redirect URI:</li>
+      </ol>
+      <p><code id="redirect-uri">http://127.0.0.1:8787/api/gmail/callback</code></p>
+      <p class="meta">Copy client id + secret from the downloaded JSON into step 2.</p>
+    </section>
+
+    <section>
+      <h2>2 · Save client credentials</h2>
+      <label for="client-id">Client ID</label>
+      <input id="client-id" autocomplete="off" spellcheck="false" placeholder="….apps.googleusercontent.com">
+      <label for="client-secret">Client secret</label>
+      <input id="client-secret" type="password" autocomplete="off" spellcheck="false" placeholder="GOCSPX-…">
+      <div class="row">
+        <button class="primary" id="save-client">Save to keychain</button>
+      </div>
+      <div class="meta" id="save-status"></div>
+    </section>
+
+    <section>
+      <h2>3 · Connect inbox</h2>
+      <p class="meta" style="margin-top:0">
+        Sign in with the Gmail you want the hub to read (your new digest account is ideal).
+        Forward school Outlook there if you want those messages too.
+      </p>
+      <div class="row">
+        <button class="primary" id="connect">Connect with Google</button>
+        <button id="test">Test pull → Digest</button>
+        <button class="danger" id="disconnect">Disconnect</button>
+      </div>
+      <div class="meta" id="connect-status"></div>
+    </section>
+
+    <section>
+      <h2>After connect</h2>
+      <ol>
+        <li>Click <strong>Test pull</strong> (or run connectors live from the hub).</li>
+        <li>Open <a href="/apps/digest/digest.html">Digest</a> and refresh.</li>
+        <li>UWCU statement emails become import reminders in Today.</li>
+      </ol>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const text = await response.text();
+      let payload = null;
+      try { payload = text ? JSON.parse(text) : null; } catch (_e) { payload = { error: text }; }
+      if (!response.ok) throw new Error((payload && payload.error) || "Request failed");
+      return payload;
+    }
+
+    function setMsg(el, text, ok) {
+      el.textContent = text || "";
+      el.className = "meta " + (ok === true ? "ok" : ok === false ? "error" : "");
+    }
+
+    function pill(label, on) {
+      return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "yes" : "no"}</span>`;
+    }
+
+    async function refreshStatus() {
+      const status = await api("/api/gmail/status");
+      document.querySelector("#redirect-uri").textContent = status.redirectUri;
+      document.querySelector("#status-pills").innerHTML =
+        pill("client", status.clientId) +
+        pill("secret", status.clientSecret) +
+        pill("refresh", status.refreshToken) +
+        pill("connected", status.connected);
+      const detail = [];
+      if (status.email) detail.push(`Inbox: ${status.email}`);
+      detail.push(status.connected ? "Ready to pull mail." : "Not fully connected yet.");
+      document.querySelector("#status-detail").textContent = detail.join(" · ");
+      return status;
+    }
+
+    document.querySelector("#save-client").addEventListener("click", async () => {
+      const el = document.querySelector("#save-status");
+      setMsg(el, "Saving…");
+      try {
+        await api("/api/gmail/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientId: document.querySelector("#client-id").value,
+            clientSecret: document.querySelector("#client-secret").value
+          })
+        });
+        document.querySelector("#client-secret").value = "";
+        setMsg(el, "Saved in Windows Credential Manager.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#connect").addEventListener("click", async () => {
+      const el = document.querySelector("#connect-status");
+      setMsg(el, "Opening Google…");
+      try {
+        const payload = await api("/api/gmail/auth-url");
+        location.href = payload.url;
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#test").addEventListener("click", async () => {
+      const el = document.querySelector("#connect-status");
+      setMsg(el, "Pulling mail…");
+      try {
+        const payload = await api("/api/gmail/test", { method: "POST" });
+        setMsg(
+          el,
+          `Live pull ok · ${payload.emitted} signal(s) · mode ${payload.mode}. Open Digest to review.`,
+          true
+        );
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#disconnect").addEventListener("click", async () => {
+      if (!confirm("Remove Gmail secrets from the keychain?")) return;
+      const el = document.querySelector("#connect-status");
+      try {
+        await api("/api/gmail/disconnect", { method: "POST" });
+        setMsg(el, "Disconnected.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    const params = new URLSearchParams(location.search);
+    if (params.get("connected") === "1") {
+      setMsg(
+        document.querySelector("#connect-status"),
+        params.get("email")
+          ? `Connected as ${params.get("email")}.`
+          : "Connected. Refresh token stored.",
+        true
+      );
+      history.replaceState({}, "", "/apps/hub/gmail.html");
+    }
+    if (params.get("error")) {
+      setMsg(document.querySelector("#connect-status"), params.get("error"), false);
+      history.replaceState({}, "", "/apps/hub/gmail.html");
+    }
+
+    refreshStatus().catch((error) => {
+      document.querySelector("#status-detail").textContent = error.message;
+      document.querySelector("#status-detail").className = "meta error";
+    });
+  </script>
+</body>
+</html>

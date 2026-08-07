@@ -27,7 +27,17 @@
     } catch (_error) {
       throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable");
     }
-    const payload = await response.json();
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      throw shelfError(
+        "HUB_ERROR",
+        response.ok
+          ? "The laptop hub returned a non-JSON response"
+          : `The laptop hub rejected the request (HTTP ${response.status})`
+      );
+    }
     if (!response.ok) {
       throw shelfError("HUB_ERROR", payload.error || "The laptop hub rejected the request");
     }
@@ -206,7 +216,8 @@
     }
   }
 
-  // Offline mock already present (one-file app): only upgrade if hub is up.
+  // Prefer hub immediately on http(s). Only fall back to waiting when a mock
+  // already claimed Shelf (legacy load order / file preview upgrades).
   if (root.Shelf?.__mock || root.Shelf?.__standalone) {
     const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timer = ctrl ? setTimeout(() => ctrl.abort(), 1200) : null;
@@ -222,6 +233,5 @@
     return;
   }
 
-  // money.html / digest.html load order: hub first.
   installHubRelay();
 })(typeof globalThis !== "undefined" ? globalThis : this);

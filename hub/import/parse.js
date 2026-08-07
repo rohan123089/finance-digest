@@ -1,10 +1,12 @@
 "use strict";
 
 /**
- * Parse CSV / OFX text into raw transaction rows for a single local account.
+ * Parse CSV / OFX / statement-PDF text into raw transaction rows
+ * for a single local account.
  */
 
 const crypto = require("node:crypto");
+const { rowsFromPdfText } = require("./pdf.js");
 
 function splitCsvLine(line) {
   const cells = [];
@@ -84,9 +86,12 @@ function normalizeDate(value) {
 }
 
 function stableId(accountId, date, merchant, amount, index) {
+  const Duplicates = require("../../engine/duplicates.js");
   const digest = crypto
     .createHash("sha256")
-    .update(`${accountId}|${date}|${merchant}|${amount}|${index}`)
+    .update(
+      `${Duplicates.fingerprint(accountId, date, amount, merchant)}|${index}`
+    )
     .digest("hex")
     .slice(0, 16);
   return `csv:${accountId}:${digest}`;
@@ -170,16 +175,30 @@ function detectFormat(text, explicit) {
   if (sample.includes("<OFX") || sample.includes("<STMTTRN>") || sample.includes("OFXHEADER")) {
     return "ofx";
   }
+  // Extracted PDF / statement paste: dated lines without CSV headers
+  const raw = String(text || "");
+  if (
+    /\b(?:statement\s+(?:of\s+account|period)|transaction\s+history|beginning\s+balance|ending\s+balance|rewards\s+checking|savings\s+account|date\s+activity)\b/i.test(
+      raw
+    ) ||
+    (/^\d{1,2}\/\d{1,2}/m.test(raw) && !/,/.test(raw.split(/\n/, 1)[0] || ""))
+  ) {
+    return "pdf";
+  }
   return "csv";
 }
 
 function parseImport({ text, accountId, accountType, format }) {
   if (!accountId) throw new Error("accountId is required");
   const resolved = detectFormat(text, format);
-  const rows =
-    resolved === "ofx"
-      ? rowsFromOfx(text, accountId, accountType)
-      : rowsFromCsv(text, accountId, accountType);
+  let rows;
+  if (resolved === "ofx") {
+    rows = rowsFromOfx(text, accountId, accountType);
+  } else if (resolved === "pdf") {
+    rows = rowsFromPdfText(text, accountId, accountType);
+  } else {
+    rows = rowsFromCsv(text, accountId, accountType);
+  }
   return { format: resolved, rows };
 }
 
@@ -188,6 +207,7 @@ module.exports = {
   detectFormat,
   rowsFromCsv,
   rowsFromOfx,
+  rowsFromPdfText,
   parseCsv,
   normalizeDate,
   directionHintFromSigned

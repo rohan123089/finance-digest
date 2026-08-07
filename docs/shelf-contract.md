@@ -47,7 +47,7 @@ device contract.
   "kind": "transactions",
   "transactions": [{ "id", "date", "rawMerchant", "amount", "account" }],
   "asOfDate": "2026-08-05",
-  "settings": { "monthlyIncome", "weeklyIncome", "weeklySavingsTarget" }
+  "settings": { "weeklySavingsTarget" }
 }
 ```
 

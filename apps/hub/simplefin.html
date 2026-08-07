@@ -50,6 +50,7 @@
 </head>
 <body>
   <main>
+    <p style="margin:0 0 16px"><a href="/apps/hub/setup.html" style="color:#74b9ff;text-decoration:none">← Setup</a></p>
     <h1>SimpleFIN</h1>
     <p class="sub">Claim a setup token, map remote bank accounts to local Money accounts, then sync. Laptop-only.</p>
 
@@ -165,7 +166,7 @@
           headers: { "Content-Type": "application/json" },
           body: "{}"
         });
-        status.textContent = `Synced (${result.mode}): inserted ${result.inserted}, unmapped ${result.unmapped?.length || 0}`;
+        status.textContent = `Synced (${result.mode}): inserted ${result.inserted}, updated ${result.updated || 0}, unmapped ${result.unmapped?.length || 0}`;
         status.className = "meta ok";
         await refresh();
       } catch (error) {

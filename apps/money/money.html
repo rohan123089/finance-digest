@@ -101,6 +101,7 @@
       text-overflow: ellipsis;
     }
     .metric.external { border-color: #7b6330; background: #201c13; }
+    .metric.external.empty-owed { opacity: 0.45; }
     .workspace {
       display: grid;
       grid-template-columns: minmax(0, 3fr) minmax(250px, 1fr);
@@ -206,7 +207,7 @@
     <header>
       <section class="hero">
         <div>
-          <div class="eyebrow">Safe to spend this week</div>
+          <div class="eyebrow" id="safe-eyebrow">Safe to spend until payday</div>
           <div class="safe-value" id="safe-value">$0</div>
           <div class="safe-detail" id="safe-detail"></div>
         </div>
@@ -216,18 +217,14 @@
           <div class="safe-detail" id="bridge-detail">Rules-first · offline</div>
         </div>
       </section>
-      <section class="panel config" aria-label="Weekly settings">
+      <section class="panel config" aria-label="Cashflow settings">
         <label>
-          <span>Weekly income</span>
-          <input id="weekly-income" type="number" min="0" step="10">
-        </label>
-        <label>
-          <span>Weekly savings target</span>
+          <span>Savings target / week</span>
           <input id="weekly-savings" type="number" min="0" step="10" value="300">
         </label>
         <label>
-          <span>Monthly income reference</span>
-          <input id="monthly-income" type="number" min="0" step="100" value="5200">
+          <span>Horizon</span>
+          <input id="horizon-note" value="Paycheck → next paycheck" disabled>
         </label>
         <label>
           <span>Edits</span>
@@ -242,7 +239,7 @@
       <div class="metric"><div class="eyebrow">Invested</div><strong id="invested"></strong></div>
       <div class="metric"><div class="eyebrow">Savings rate</div><strong id="savings-rate"></strong></div>
       <div class="metric"><div class="eyebrow">Runway</div><strong id="runway"></strong></div>
-      <div class="metric external"><div class="eyebrow">Owed · outside payments</div><strong id="owed"></strong></div>
+      <div class="metric external"><div class="eyebrow">Owed · reimbursements</div><strong id="owed"></strong></div>
     </section>
 
     <section class="workspace">
@@ -275,12 +272,42 @@
 
       <aside class="side">
         <section class="panel">
-          <div class="panel-heading"><h2>Spending by category</h2><strong id="expense-total"></strong></div>
+          <div class="panel-heading"><h2>Spending this month</h2><strong id="expense-total"></strong></div>
           <div class="list" id="categories"></div>
         </section>
         <section class="panel">
           <div class="panel-heading"><h2>Detected recurring</h2><strong id="recurring-total"></strong></div>
           <div class="list" id="recurring"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Bills schedule</h2><strong id="bills-count"></strong></div>
+          <div class="list" id="bills"></div>
+          <div class="account-actions" style="display:grid;gap:8px;padding:12px 14px 14px;border-top:1px solid var(--line)">
+            <div class="eyebrow">Add monthly bill</div>
+            <input id="bill-title" placeholder="Title (e.g. Rent)" style="border:1px solid var(--line);border-radius:8px;background:#0f1620;color:var(--text);padding:8px 10px">
+            <input id="bill-amount" type="number" min="0" step="1" placeholder="Amount" style="border:1px solid var(--line);border-radius:8px;background:#0f1620;color:var(--text);padding:8px 10px">
+            <label style="display:grid;gap:4px;font-size:12px;color:var(--muted)">
+              Due day of month
+              <input id="bill-due-day" type="number" min="1" max="31" value="1" style="border:1px solid var(--line);border-radius:8px;background:#0f1620;color:var(--text);padding:8px 10px">
+            </label>
+            <label style="display:grid;gap:4px;font-size:12px;color:var(--muted)">
+              Remind days before
+              <input id="bill-lead" type="number" min="0" max="28" value="5" style="border:1px solid var(--line);border-radius:8px;background:#0f1620;color:var(--text);padding:8px 10px">
+            </label>
+            <button type="button" id="bill-add" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add bill</button>
+            <div class="eyebrow" style="margin-top:4px">Shows on Digest Today within the remind window. Set rent amount here.</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Card rewards</h2><strong id="rewards-missed"></strong></div>
+          <div class="list" id="rewards-pointers"></div>
+          <div class="list" id="rewards-offers" style="border-top:1px solid var(--line)"></div>
+          <div class="account-actions" style="display:grid;gap:8px;padding:12px 14px 14px;border-top:1px solid var(--line)">
+            <button type="button" id="rewards-optimize" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Optimize</button>
+            <button type="button" id="rewards-refresh" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Refresh from web</button>
+            <button type="button" id="rewards-add-offer" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add offer</button>
+            <div class="eyebrow">Rates treated as cash-equivalent. Edit Amex seed rules to match your card. Advisory only.</div>
+          </div>
         </section>
         <section class="panel">
           <div class="panel-heading"><h2>Account balances</h2></div>
@@ -289,11 +316,16 @@
             <div class="eyebrow">Manage</div>
             <button type="button" id="add-account" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add account</button>
             <label style="display:grid;gap:4px">
-              <span class="eyebrow">Import CSV/OFX into</span>
+              <span class="eyebrow">Import CSV/OFX/PDF into</span>
               <select id="import-account" aria-label="Import account"></select>
             </label>
-            <input id="import-file" type="file" accept=".csv,.ofx,.qfx,text/csv" style="font-size:12px;color:var(--muted)">
-            <a id="simplefin-link" href="/apps/hub/simplefin.html" style="color:var(--accent);font-size:12px">Link SimpleFIN →</a>
+            <input id="import-file" type="file" accept=".csv,.ofx,.qfx,.pdf,text/csv,application/pdf" style="font-size:12px;color:var(--muted)">
+            <div class="eyebrow">UWCU PDFs auto-split checking + savings (OCR ~20–40s)</div>
+            <div class="eyebrow" style="margin-top:4px">Recent uploads</div>
+            <div class="list" id="import-batches" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px"></div>
+            <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--accent);font-size:12px">Hub setup →</a>
+            <a id="simplefin-link" href="/apps/hub/simplefin.html" style="color:var(--muted);font-size:12px">SimpleFIN →</a>
+            <a id="gmail-link" href="/apps/hub/gmail.html" style="color:var(--accent);font-size:12px;margin-left:10px">Connect Gmail →</a>
           </div>
         </section>
       </aside>
@@ -319,7 +351,11 @@
       asOfDate: "2026-08-05",
       snapshot: null,
       accounts: [],
-      accountLabels: {}
+      accountLabels: {},
+      bills: [],
+      billsUpcoming: [],
+      rewards: null,
+      importBatches: []
     };
 
     const currency = new Intl.NumberFormat("en-US", {
@@ -333,9 +369,8 @@
       minimumFractionDigits: 2
     });
 
-    const weeklyIncomeInput = document.querySelector("#weekly-income");
-    const monthlyIncomeInput = document.querySelector("#monthly-income");
     const weeklySavingsInput = document.querySelector("#weekly-savings");
+    const horizonNote = document.querySelector("#horizon-note");
 
     function option(value, label, selected) {
       return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
@@ -350,8 +385,6 @@
     function settings() {
       return {
         asOfDate: state.asOfDate,
-        monthlyIncome: Number(monthlyIncomeInput.value) || 0,
-        weeklyIncome: Number(weeklyIncomeInput.value) || 0,
         weeklySavingsTarget: Number(weeklySavingsInput.value) || 0
       };
     }
@@ -404,22 +437,38 @@
     function renderSnapshot() {
       const snapshot = state.snapshot;
       if (!snapshot) return;
+      const safe = snapshot.safeToSpend;
       const safeValue = document.querySelector("#safe-value");
-      safeValue.textContent = currency.format(snapshot.safeToSpend.remaining);
-      safeValue.classList.toggle("negative", snapshot.safeToSpend.remaining < 0);
+      safeValue.textContent = currency.format(safe.remaining);
+      safeValue.classList.toggle("negative", safe.remaining < 0);
+      document.querySelector("#safe-eyebrow").textContent = safe.nextPayday
+        ? `Safe to spend until ${safe.nextPayday}`
+        : "Safe to spend this period";
+      if (horizonNote) {
+        horizonNote.value = safe.period
+          ? `${safe.period} · ${safe.horizonDays || "?"}d`
+          : "Paycheck → next paycheck";
+      }
+      const incomeLabel = currency.format(safe.income ?? safe.weeklyIncome);
       document.querySelector("#safe-detail").textContent =
-        `${currency.format(snapshot.safeToSpend.weeklyIncome)} income − ` +
-        `${currency.format(snapshot.safeToSpend.committed)} committed − ` +
-        `${currency.format(snapshot.safeToSpend.savingsTarget)} savings − ` +
-        `${currency.format(snapshot.safeToSpend.spent)} spent`;
+        `${incomeLabel} in − ` +
+        `${currency.format(safe.committed)} out committed − ` +
+        `${currency.format(safe.savingsTarget)} savings − ` +
+        `${currency.format(safe.spent)} spent`;
       document.querySelector("#net-worth").textContent = currency.format(snapshot.netWorth);
       document.querySelector("#liquid").textContent = currency.format(snapshot.liquid);
       document.querySelector("#invested").textContent = currency.format(snapshot.invested);
       document.querySelector("#savings-rate").textContent =
         `${Number(snapshot.savingsRatePct).toFixed(1)}%`;
       document.querySelector("#runway").textContent = `${snapshot.runwayMonths.toFixed(1)} mo`;
-      document.querySelector("#owed").textContent = currency.format(snapshot.owed);
-      document.querySelector("#expense-total").textContent = currency.format(snapshot.expenses);
+      document.querySelector("#owed").textContent = currency.format(snapshot.owed || 0);
+      document.querySelector("#owed").closest(".metric")?.classList.toggle(
+        "empty-owed",
+        !(snapshot.owed > 0)
+      );
+      document.querySelector("#expense-total").textContent = currency.format(
+        snapshot.expensesThisMonth ?? snapshot.expenses
+      );
       document.querySelector("#recurring-total").textContent =
         `${currency.format(snapshot.recurringMonthly)}/mo`;
 
@@ -438,27 +487,166 @@
           <strong>${currency.format(item.amount)}</strong>
         </div>`), "No monthly patterns yet");
 
-      renderList("#accounts", Object.entries(snapshot.balances).map(([account, balance]) => `
-        <div class="list-row">
-          <span>${escapeHtml(state.accountLabels[account] || account)}</span>
+      renderBills();
+
+      renderList("#accounts", Object.entries(snapshot.balances).map(([account, balance]) => {
+        const breakdown = snapshot.holdingBreakdown?.[account];
+        const detail = breakdown
+          ? `<br><small style="color:var(--muted)">${currency.format(breakdown.invested)} invested · ${currency.format(breakdown.cash)} cash/MM</small>`
+          : "";
+        return `
+        <div class="list-row" style="align-items:start">
+          <span>${escapeHtml(state.accountLabels[account] || account)}${detail}</span>
           <strong>${currency.format(balance)}</strong>
-        </div>`), "No accounts");
+        </div>`;
+      }), "No accounts");
 
       const importSelect = document.querySelector("#import-account");
       if (importSelect) {
         const current = importSelect.value;
-        importSelect.innerHTML = state.accounts
+        const accountOptions = Object.entries(state.accountLabels)
           .map(
-            (account) =>
-              `<option value="${escapeHtml(account.id)}">${escapeHtml(account.label)}</option>`
+            ([id, label]) =>
+              `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`
           )
           .join("");
-        if (current && state.accountLabels[current]) importSelect.value = current;
+        importSelect.innerHTML =
+          `<option value="uwcu-auto">UWCU statement (auto-split)</option>` +
+          accountOptions;
+        if (current && (current === "uwcu-auto" || state.accountLabels[current])) {
+          importSelect.value = current;
+        } else {
+          importSelect.value = "uwcu-auto";
+        }
       }
 
       const reviewCount = state.transactions.filter((tx) => tx.needsReview).length;
       document.querySelector("#review-count").textContent =
         reviewCount ? `${reviewCount} needs review` : "All reviewed";
+    }
+
+    function renderBills() {
+      const countEl = document.querySelector("#bills-count");
+      if (countEl) {
+        const active = state.bills.filter((b) => b.active).length;
+        countEl.textContent = active ? `${active} active` : "None";
+      }
+      const upcomingById = Object.fromEntries(
+        (state.billsUpcoming || []).map((row) => [row.billId, row])
+      );
+      renderList(
+        "#bills",
+        state.bills.map((bill) => {
+          const next = upcomingById[bill.id];
+          const when = next
+            ? next.remind
+              ? escapeHtml(next.label)
+              : `day ${bill.dueDay} · in ${next.daysUntil}d`
+            : `day ${bill.dueDay}`;
+          const amount =
+            bill.amount > 0 ? preciseCurrency.format(bill.amount) : "set amount";
+          const off = bill.active ? "" : " · off";
+          return `
+          <div class="list-row" style="align-items:start;gap:8px">
+            <span>
+              <strong>${escapeHtml(bill.title)}</strong>${off}<br>
+              <small style="color:var(--muted)">${when}</small>
+            </span>
+            <span style="text-align:right">
+              <strong>${amount}</strong><br>
+              <button type="button" class="bill-edit" data-id="${escapeHtml(bill.id)}" style="margin-top:4px;border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:2px 6px;font-size:11px;cursor:pointer">Edit</button>
+            </span>
+          </div>`;
+        }),
+        "No bills yet — add rent below"
+      );
+    }
+
+    function renderRewards() {
+      const rewards = state.rewards;
+      const missedEl = document.querySelector("#rewards-missed");
+      if (!rewards) {
+        if (missedEl) missedEl.textContent = "";
+        renderList("#rewards-pointers", [], "Open via hub to optimize");
+        renderList("#rewards-offers", [], "");
+        return;
+      }
+      if (missedEl) {
+        missedEl.textContent = rewards.totals?.missedUsd
+          ? `~$${Number(rewards.totals.missedUsd).toFixed(0)} left`
+          : "On track";
+      }
+      renderList(
+        "#rewards-pointers",
+        (rewards.pointers || []).slice(0, 5).map(
+          (p) => `
+          <div class="list-row" style="align-items:start">
+            <span style="font-size:12px;line-height:1.35">${escapeHtml(p.text)}</span>
+          </div>`
+        ),
+        "No pointers yet — need categorized card spend"
+      );
+      renderList(
+        "#rewards-offers",
+        (rewards.activeOffers || []).map(
+          (o) => `
+          <div class="list-row">
+            <span>${escapeHtml(o.title)}<br><small style="color:var(--muted)">${escapeHtml(o.accountId)} · ${escapeHtml(String(o.ratePct))}% · ends ${escapeHtml(o.endsOn || "—")}</small></span>
+          </div>`
+        ),
+        "No active offers — Refresh from web or Add offer"
+      );
+    }
+
+    function formatImportWhen(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      });
+    }
+
+    function renderImportBatches() {
+      const batches = state.importBatches || [];
+      renderList(
+        "#import-batches",
+        batches.map((batch) => {
+          const split =
+            batch.byAccount && Object.keys(batch.byAccount).length
+              ? Object.entries(batch.byAccount)
+                  .map(([id, n]) => `${state.accountLabels[id] || id} ${n}`)
+                  .join(" · ")
+              : `${batch.insertedCount} rows`;
+          return `
+          <div class="list-row" data-import-id="${escapeHtml(batch.id)}">
+            <span style="font-size:12px;line-height:1.35">
+              ${escapeHtml(batch.label || batch.format || "Import")}<br>
+              <small style="color:var(--muted)">${escapeHtml(formatImportWhen(batch.createdAt))} · ${escapeHtml(split)}</small>
+            </span>
+            <button type="button" class="import-undo" data-id="${escapeHtml(batch.id)}" style="border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:4px 8px;font-size:11px;cursor:pointer">Undo</button>
+          </div>`;
+        }),
+        "No uploads yet"
+      );
+    }
+
+    async function refreshImportBatches() {
+      if (!Shelf.import?.list) {
+        state.importBatches = [];
+        renderImportBatches();
+        return;
+      }
+      try {
+        const payload = await Shelf.import.list();
+        state.importBatches = payload?.batches || [];
+      } catch {
+        state.importBatches = [];
+      }
+      renderImportBatches();
     }
 
     function actionId(prefix) {
@@ -478,11 +666,16 @@
     }
 
     async function refreshFromShelf() {
-      const [transactionsPayload, snapshotPayload, accountsPayload] = await Promise.all([
-        Shelf.data.get("transactions"),
-        Shelf.data.get("snapshot"),
-        Shelf.data.get("accounts").catch(() => null)
-      ]);
+      const [transactionsPayload, snapshotPayload, accountsPayload, billsPayload, rewardsPayload] =
+        await Promise.all([
+          Shelf.data.get("transactions"),
+          Shelf.data.get("snapshot"),
+          Shelf.data.get("accounts").catch(() => null),
+          (Shelf.bills?.list || (() => Shelf.data.get("bills")))()
+            .catch(() => null),
+          (Shelf.rewards?.get || (() => Shelf.data.get("rewards")))()
+            .catch(() => null)
+        ]);
       // Device contract: data.get('transactions') is a { transactions } field
       // sourced from the encrypted digest/snapshot, or null. The laptop hub
       // relay additionally exposes raw rows as the source of truth.
@@ -511,10 +704,12 @@
       }
 
       if (transactionsPayload?.settings) {
-        monthlyIncomeInput.value = transactionsPayload.settings.monthlyIncome;
-        weeklyIncomeInput.value = Number(transactionsPayload.settings.weeklyIncome).toFixed(2);
         weeklySavingsInput.value = transactionsPayload.settings.weeklySavingsTarget;
       }
+
+      state.bills = billsPayload?.bills || [];
+      state.billsUpcoming = billsPayload?.upcoming || [];
+      state.rewards = rewardsPayload || null;
 
       if (state.transactions.length) {
         renderTable();
@@ -522,7 +717,156 @@
         renderEmptyState(false);
       }
       renderSnapshot();
+      renderRewards();
+      await refreshImportBatches();
     }
+
+    document.querySelector("#rewards-optimize")?.addEventListener("click", async () => {
+      try {
+        const result = Shelf.rewards?.optimize
+          ? await Shelf.rewards.optimize()
+          : await Shelf.data.get("rewards");
+        state.rewards = result;
+        renderRewards();
+        document.querySelector("#bridge-detail").textContent =
+          result.totals?.missedUsd != null
+            ? `Rewards: ~$${Number(result.totals.missedUsd).toFixed(2)} potentially left on table`
+            : "Rewards optimized";
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Optimize failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#rewards-refresh")?.addEventListener("click", async () => {
+      if (!Shelf.rewards?.refresh) {
+        document.querySelector("#bridge-detail").textContent =
+          "Rewards refresh requires the laptop hub";
+        return;
+      }
+      try {
+        const result = await Shelf.rewards.refresh(false);
+        document.querySelector("#bridge-detail").textContent =
+          `Rewards ${result.mode}: upserted ${result.upserted}` +
+          (result.error ? ` · ${result.error}` : "");
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Rewards refresh failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#rewards-add-offer")?.addEventListener("click", async () => {
+      if (!Shelf.rewards?.saveOffer) {
+        document.querySelector("#bridge-detail").textContent =
+          "Add offer requires the laptop hub";
+        return;
+      }
+      const accountId = window.prompt("Card account id", "discover");
+      if (!accountId) return;
+      const title = window.prompt("Offer title", "5% bonus category");
+      if (!title) return;
+      const category = window.prompt("Category (groceries, dining, transportation…)", "groceries");
+      const ratePct = Number(window.prompt("Rate %", "5")) || 5;
+      const endsOn = window.prompt("Ends on (YYYY-MM-DD)", "") || null;
+      try {
+        await Shelf.rewards.saveOffer({
+          accountId,
+          title,
+          category,
+          ratePct,
+          endsOn,
+          active: true,
+          source: "manual"
+        });
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Add offer failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#bill-add")?.addEventListener("click", async () => {
+      const title = document.querySelector("#bill-title")?.value?.trim();
+      if (!title) return;
+      const amount = Number(document.querySelector("#bill-amount")?.value) || 0;
+      const dueDay = Number(document.querySelector("#bill-due-day")?.value) || 1;
+      const leadDays = Number(document.querySelector("#bill-lead")?.value) || 5;
+      try {
+        if (Shelf.bills?.create) {
+          await Shelf.bills.create({
+            title,
+            amount,
+            dueDay,
+            leadDays,
+            active: true,
+            category: "housing"
+          });
+        } else {
+          await Shelf.outbox.push({
+            id: actionId("bill"),
+            type: "action.bills.upsert",
+            source: "money",
+            collectedAt: new Date().toISOString(),
+            data: {
+              id: `bill:${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+              title,
+              amount,
+              dueDay,
+              leadDays,
+              active: true
+            }
+          });
+        }
+        document.querySelector("#bill-title").value = "";
+        document.querySelector("#bill-amount").value = "";
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Add bill failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#bills")?.addEventListener("click", async (event) => {
+      const button = event.target.closest(".bill-edit");
+      if (!button) return;
+      const id = button.dataset.id;
+      const bill = state.bills.find((row) => row.id === id);
+      if (!bill) return;
+      const amountRaw = window.prompt(`Amount for ${bill.title}`, String(bill.amount || 0));
+      if (amountRaw == null) return;
+      const dueRaw = window.prompt("Due day of month (1-31)", String(bill.dueDay || 1));
+      if (dueRaw == null) return;
+      const leadRaw = window.prompt("Remind how many days before?", String(bill.leadDays || 3));
+      if (leadRaw == null) return;
+      const active = window.confirm("Keep this bill active? OK = yes, Cancel = turn off");
+      try {
+        const patch = {
+          title: bill.title,
+          amount: Number(amountRaw) || 0,
+          dueDay: Number(dueRaw) || 1,
+          leadDays: Number(leadRaw) || 3,
+          active,
+          category: bill.category,
+          notes: bill.notes
+        };
+        if (Shelf.bills?.update) {
+          await Shelf.bills.update(id, patch);
+        } else {
+          await Shelf.outbox.push({
+            id: actionId("bill"),
+            type: "action.bills.upsert",
+            source: "money",
+            collectedAt: new Date().toISOString(),
+            data: { ...patch, id }
+          });
+        }
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Edit bill failed: ${error.message || error}`;
+      }
+    });
 
     document.querySelector("#add-account")?.addEventListener("click", async () => {
       if (!Shelf.accounts?.create) {
@@ -545,6 +889,18 @@
       }
     });
 
+    function fileToBase64(file) {
+      return file.arrayBuffer().then((buffer) => {
+        const bytes = new Uint8Array(buffer);
+        const chunk = 0x8000;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+      });
+    }
+
     document.querySelector("#import-file")?.addEventListener("change", async (event) => {
       const file = event.target.files?.[0];
       if (!file) return;
@@ -559,16 +915,77 @@
         return;
       }
       try {
-        const text = await file.text();
-        const result = await Shelf.import.text({ accountId, text, format: "auto" });
-        document.querySelector("#bridge-detail").textContent =
-          `Imported ${result.inserted} new · skipped ${result.skipped}`;
+        const isPdf =
+          /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+        document.querySelector("#bridge-detail").textContent = isPdf
+          ? "Reading PDF (OCR can take 20–40s)…"
+          : "Importing…";
+        const payload = isPdf
+          ? {
+              accountId,
+              base64: await fileToBase64(file),
+              format: "pdf",
+              label: file.name
+            }
+          : {
+              accountId,
+              text: await file.text(),
+              format: "auto",
+              label: file.name
+            };
+        const result = await Shelf.import.text(payload);
+        const split =
+          result.byAccount && Object.keys(result.byAccount).length
+            ? " · " +
+              Object.entries(result.byAccount)
+                .map(([id, n]) => `${state.accountLabels[id] || id}: ${n}`)
+                .join(", ")
+            : "";
+        const via = result.extractMethod === "ocr" ? " via OCR" : "";
+        const linked =
+          result.linkedTransfers > 0
+            ? ` · linked ${result.linkedTransfers} internal transfer${
+                result.linkedTransfers === 1 ? "" : "s"
+              }`
+            : "";
+        document.querySelector("#bridge-detail").textContent = result.duplicateFile
+          ? result.message ||
+            `Same file already imported — skipped ${result.skipped} duplicate${
+              result.skipped === 1 ? "" : "s"
+            }`
+          : `Imported ${result.inserted} new · skipped ${result.skipped}${via}${split}${linked}` +
+            (result.batchId ? " · Undo available below" : "");
         await refreshFromShelf();
       } catch (error) {
         document.querySelector("#bridge-detail").textContent =
           `Import failed: ${error.message || error}`;
       } finally {
         event.target.value = "";
+      }
+    });
+
+    document.querySelector("#import-batches")?.addEventListener("click", async (event) => {
+      const button = event.target.closest(".import-undo");
+      if (!button) return;
+      const id = button.dataset.id;
+      if (!id || !Shelf.import?.undo) return;
+      const batch = state.importBatches.find((item) => item.id === id);
+      const label = batch?.label || "this upload";
+      const confirmMsg =
+        id === "legacy-orphans"
+          ? `Remove ${batch?.insertedCount || "all"} older imported transactions (CSV/OFX/PDF before undo tracking)?`
+          : `Remove all transactions from “${label}”?`;
+      if (!window.confirm(confirmMsg)) return;
+      button.disabled = true;
+      try {
+        const result = await Shelf.import.undo(id);
+        document.querySelector("#bridge-detail").textContent =
+          `Removed ${result.deletedTransactions} transactions from ${label}`;
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Undo failed: ${error.message || error}`;
+        button.disabled = false;
       }
     });
 
@@ -628,13 +1045,7 @@
       await refreshFromShelf();
     }
 
-    [weeklyIncomeInput, weeklySavingsInput].forEach((input) => {
-      input.addEventListener("change", () => saveSettings().catch(console.error));
-    });
-    monthlyIncomeInput.addEventListener("input", () => {
-      weeklyIncomeInput.value = ((Number(monthlyIncomeInput.value) || 0) / 4.345).toFixed(2);
-    });
-    monthlyIncomeInput.addEventListener("change", () => saveSettings().catch(console.error));
+    weeklySavingsInput.addEventListener("change", () => saveSettings().catch(console.error));
 
     async function boot() {
       if (!window.Shelf || typeof Shelf.data?.get !== "function") {

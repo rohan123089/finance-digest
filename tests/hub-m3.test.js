@@ -82,7 +82,9 @@ async function main() {
   assert.equal(typeof health.body.connectors, "object");
   assert.equal(health.body.connectors["groupme.token"], false);
 
-  const run = await request(port, "POST", "/api/connectors/run", {});
+  const run = await request(port, "POST", "/api/connectors/run", {
+    forceMock: true
+  });
   assert.equal(run.status, 200);
   assert.equal(run.body.forceMock, true);
   assert.equal(run.body.groupme.mode, "mock");
@@ -92,6 +94,11 @@ async function main() {
   const digest = await request(port, "GET", "/api/digest");
   assert.ok(digest.body.today.some((item) => item.kind === "event"));
   assert.ok(digest.body.reading.some((item) => item.source === "newsletter"));
+
+  // Default connector run must not inject mock data.
+  const liveDefault = await request(port, "POST", "/api/connectors/run", {});
+  assert.equal(liveDefault.status, 200);
+  assert.equal(liveDefault.body.forceMock, false);
 
   await new Promise((resolve) => server.close(resolve));
   db.close();

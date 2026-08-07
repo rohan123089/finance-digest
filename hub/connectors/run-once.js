@@ -12,7 +12,8 @@ async function main() {
   const dbPath = process.env.HUB_DB_PATH || dbApi.DEFAULT_DB_PATH;
   const encryptionKey = await secretStore.getOrCreateDatabaseKey(dbPath);
   const db = dbApi.openDatabase({ dbPath, encryptionKey });
-  const forceMock = process.env.HUB_CONNECTORS_LIVE !== "1";
+  // Mock is opt-in only. Default: live connectors, skip if not configured.
+  const forceMock = process.env.HUB_CONNECTORS_MOCK === "1";
   try {
     const result = await connectors.runAll(db, { forceMock });
     await sync.publishDown(db, projectRoot, syncRoot);
@@ -25,10 +26,20 @@ async function main() {
           sms: { mode: result.sms.mode, emitted: result.sms.emitted.length },
           email: { mode: result.email.mode, emitted: result.email.emitted.length },
           bank: { mode: result.bank.mode, emitted: result.bank.emitted.length },
+          canvas: {
+            mode: result.canvas.mode,
+            emitted: result.canvas.emitted.length,
+            error: result.canvas.error || null
+          },
           simplefin: {
             mode: result.simplefin.mode,
             inserted: result.simplefin.inserted,
             unmapped: result.simplefin.unmapped?.length || 0
+          },
+          rewards: {
+            mode: result.rewards.mode,
+            upserted: result.rewards.upserted,
+            amexStatus: result.rewards.amexStatus
           }
         },
         null,

@@ -67,19 +67,24 @@ Phone may also push raw `signal.sms` `{ text, from }`; the hub expands it on ing
 
 `digest-latest.json` has these sections:
 
-- `today[]`: birthdays, events, and tasks (money + life). Each has `actions[]` carrying a
-  `targetRef` that the phone echoes back. Life tasks/events may include `domain`.
+- `today[]`: birthdays, **standing bill reminders**, events, and tasks (money + life).
+  Each has `actions[]` carrying a `targetRef` that the phone echoes back. Life
+  tasks/events may include `domain`. Bill rows use `kind: "bill"` with
+  `bill.paid` / `dismiss` for the month.
   Events offer `rsvp.yes` / `rsvp.no` / `calendar.add`.
 - `watching[]`: events you marked **not going** — still listed so you know they happen.
 - `reading[]`: title, URL, source, and rank.
 - `junk[]`: unsubscribe or mute entries with a `targetRef`.
+
+Standing bills live in the hub DB (`bills` table): monthly `dueDay`, `leadDays`
+before due, amount, active flag. Money UI manages them; Digest surfaces nags.
 ## DOWN — snapshot
 
 `snapshot-latest.json` is already aggregated and redacted. It contains no account
 numbers or raw transactions and is the only payload the optional AI layer may see.
 
 Fields: `netWorth`, `liquid`, `invested`, `savingsRatePct`, `recurringMonthly`,
-`runwayMonths`, `owed`, `safeToSpend{ period, amount, spent, remaining }`, and
+`runwayMonths`, `owed`, `safeToSpend{ period, amount, income, committed, spent, remaining, nextPayday }`, and
 `flags[]{ id, trigger, why, action, value, deadline, confidence }`.
 
 ## Merge, encryption, and versioning

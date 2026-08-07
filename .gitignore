@@ -14,3 +14,4 @@ hub/sync/meta/**
 *.db-*
 *.work.sqlite
 .env
+*.traineddata

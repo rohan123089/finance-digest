@@ -1,0 +1,33 @@
+Statement of Account
+ROHAN EXAMPLE Page: 1 Statement Date: 07/31/26
+REWARDS CHECKING
+1234
+All Transactions by Date
+Date Activity Amount, Balance
+06/30 Balance Forward 1,001.21
+07/01 Web Branch:Zelle RAKESH EXAMPLE 1,500.00 2,501.21
+07/01 Web Branch:Zelle RAKESH EXAMPLE 1,900.00 4,401.21
+07/02 ACH:Versailles Oakbr -WEB PMTS 1,718.00- 2,683.21
+07/04 DEBITCARD 2706:PURCHASE LONG BEACH NY 34.80- 2,648.41
+07/03/26 CITY OF LONG BEACH
+07/06 ACH:Versailles Oakbr -WEB PMTS 57.35- 2,591.06
+07/08 ACH:VENMO PAYMENT 38.00- 2,553.06
+07/13 ACH:AMEX EPAYMENT ACH PMT 1,384.67- 1,168.39
+07/31 DIVIDEND PAID .06 1,168.45
+Checking Account Summary
+Beginning Balance 1,001.21
+DEPOSIT ACCOUNT SUMMARY
+REWARDS CHECKING 1,168.45
+
+Statement of Account
+Page: 2 Statement Date: 07/31/26
+SAVINGS ACCOUNT
+5678
+Date Activity Amount, Balance
+06/30 Balance Forward 7,120.89
+07/15 Web Branch:MOBILE DEPOSIT 420.75 7,541.64
+07/31 DIVIDEND PAID 2.11 7,543.75
+savings Account Summary
+DEPOSIT ACCOUNT SUMMARY
+SAVINGS ACCOUNT 7,543.75
+We're here for whatever comes next.

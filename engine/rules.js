@@ -45,6 +45,45 @@
       transferAccount: "savings"
     },
     {
+      contains: "transfer from savings",
+      direction: "transfer",
+      merchant: "Savings Transfer",
+      transferAccount: "savings"
+    },
+    {
+      contains: "transfer to checking",
+      direction: "transfer",
+      merchant: "Checking Transfer",
+      transferAccount: "checking"
+    },
+    {
+      contains: "amex epayment",
+      direction: "transfer",
+      merchant: "Amex Payment",
+      transferAccount: "amex"
+    },
+    {
+      contains: "american express",
+      direction: "transfer",
+      merchant: "Amex Payment",
+      transferAccount: "amex",
+      requires: /\b(epayment|e-?payment|ach|pmt|payment|online|web)\b/i
+    },
+    {
+      contains: "amex",
+      direction: "transfer",
+      merchant: "Amex Payment",
+      transferAccount: "amex",
+      requires: /\b(epayment|e-?payment|ach|pmt|payment)\b/i
+    },
+    {
+      contains: "discover",
+      direction: "transfer",
+      merchant: "Discover Payment",
+      transferAccount: "discover",
+      requires: /\b(epayment|e-?payment|ach|pmt|payment)\b/i
+    },
+    {
       contains: "vanguard buy",
       direction: "transfer",
       merchant: "Vanguard",
@@ -88,7 +127,9 @@
       if (start === -1) return false;
       const before = normalized[start - 1] || "";
       const after = normalized[start + phrase.length] || "";
-      return !/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after);
+      if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) return false;
+      if (rule.requires && !rule.requires.test(String(value || ""))) return false;
+      return true;
     });
   }
 
@@ -132,6 +173,22 @@
         : accountTypes["uwcu-savings"]
           ? "uwcu-savings"
           : "";
+    const checkingHint = accountTypes.checking
+      ? "checking"
+      : accountTypes["uwcu-checking"]
+        ? "uwcu-checking"
+        : "";
+
+    let transferAccount = typingRule?.transferAccount || "";
+    if (transferAccount === "savings" && !accountTypes.savings && savingsHint) {
+      transferAccount = savingsHint;
+    }
+    if (transferAccount === "checking" && !accountTypes.checking && checkingHint) {
+      transferAccount = checkingHint;
+    }
+    if (transferAccount && !accountTypes[transferAccount]) {
+      transferAccount = "";
+    }
 
     return {
       id: String(raw.id),
@@ -144,7 +201,7 @@
       date: raw.date,
       needsReview:
         ambiguous || (!typingRule && direction !== "out" && direction !== "in"),
-      transferAccount: typingRule?.transferAccount || "",
+      transferAccount,
       suggestedTransferAccount: ambiguous ? savingsHint : ""
     };
   }

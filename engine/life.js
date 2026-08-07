@@ -27,7 +27,7 @@ const STATEMENT_RE =
   /\b(?:e-?statement|account statement|monthly statement|your statement|statement (?:is|for|ready|available)|statement notification)\b/i;
 const URL_RE = /https?:\/\/[^\s<>"')]+/gi;
 
-/** Map statement email clues → local Money account ids (CSV import targets). */
+/** Map statement email clues → local Money account ids (PDF/CSV/OFX import targets). */
 const STATEMENT_ACCOUNT_RULES = [
   {
     accountId: "uwcu-checking",
@@ -229,11 +229,12 @@ function extractFromMessage(message, options = {}) {
   const domain = normalizeDomain(message.domain || inferDomain(text, from));
   const items = [];
 
-  // Bank/credit-union statements → remind to CSV-import (SimpleFIN covers live sync elsewhere).
+  // Bank/credit-union statements → remind to import PDF/CSV/OFX (SimpleFIN covers live sync elsewhere).
   if (isStatementMessage(text) || isStatementMessage(from)) {
     const matched = matchStatementAccount(text, from);
     const label = matched?.label || "account";
     const accountId = matched?.accountId || null;
+    const isUwcu = accountId === "uwcu-checking" || /uwcu/i.test(label);
     items.push({
       id: `life:statement:${idBase}`,
       type: "signal.task",
@@ -241,7 +242,9 @@ function extractFromMessage(message, options = {}) {
       at: receivedAt,
       data: {
         title: accountId
-          ? `Import ${label} statement into Money`
+          ? isUwcu
+            ? `Import ${label} PDF statement into Money`
+            : `Import ${label} statement into Money`
           : `Import bank statement into Money`,
         dueAt: receivedAt,
         domain: "personal",
@@ -249,7 +252,8 @@ function extractFromMessage(message, options = {}) {
         why: "statement email",
         kind: "import.statement",
         accountId,
-        accountLabel: label
+        accountLabel: label,
+        preferredFormat: isUwcu ? "pdf" : "auto"
       }
     });
     return items;

@@ -2,21 +2,27 @@
 
 /**
  * Hub-only connectors. Secrets live in the OS keychain and are used via Net.call.
- * HTML / Shelf never see tokens. Default is mock.
+ * HTML / Shelf never see tokens.
+ *
+ * Mock data is opt-in only (`forceMock: true`) for tests. Production paths
+ * default to live-or-skip and must never write fake transactions into the DB.
  */
 
 const dbApi = require("../db.js");
 const Net = require("../net.js");
 const life = require("../../engine/life.js");
 const simplefin = require("./simplefin.js");
+const rewardsWeb = require("./rewards-web.js");
+const canvas = require("./canvas.js");
 
 async function runGroupMe(db, options = {}) {
-  const forceMock = options.forceMock !== false;
+  const forceMock = options.forceMock === true;
   const watermark = dbApi.getConnectorWatermark(db, "groupme") || "0";
   let messages;
-  let mode = "mock";
+  let mode = "live";
 
   if (forceMock) {
+    mode = "mock";
     messages = [
       {
         id: "998877",
@@ -80,12 +86,13 @@ async function runGroupMe(db, options = {}) {
 }
 
 async function runSms(db, options = {}) {
-  const forceMock = options.forceMock !== false;
+  const forceMock = options.forceMock === true;
   const watermark = dbApi.getConnectorWatermark(db, "sms") || "";
   let messages;
-  let mode = "mock";
+  let mode = "live";
 
   if (forceMock) {
+    mode = "mock";
     messages = [
       {
         id: "sms-5001",
@@ -176,7 +183,7 @@ function mockLifeMessages() {
       id: "mail-5005",
       subject: "Your UWCU e-Statement is ready",
       snippet:
-        "Your University of Wisconsin Credit Union monthly statement is available. Download CSV from online banking, then import into Money.",
+        "Your University of Wisconsin Credit Union monthly statement is available. Download the PDF e-statement, then import into Money.",
       from: "estatements@uwcu.org",
       receivedAt: now,
       source: "email"
@@ -185,12 +192,13 @@ function mockLifeMessages() {
 }
 
 async function runEmail(db, options = {}) {
-  const forceMock = options.forceMock !== false;
+  const forceMock = options.forceMock === true;
   const watermark = dbApi.getConnectorWatermark(db, "email") || "";
   let messages;
-  let mode = "mock";
+  let mode = "live";
 
   if (forceMock) {
+    mode = "mock";
     messages = mockLifeMessages();
   } else {
     const data = await Net.call("email", { maxResults: 15 });
@@ -208,7 +216,6 @@ async function runEmail(db, options = {}) {
         source: "email"
       }));
     }
-    mode = "live";
   }
 
   const emitted = [];
@@ -245,12 +252,13 @@ async function runEmail(db, options = {}) {
 }
 
 async function runBank(db, options = {}) {
-  const forceMock = options.forceMock !== false;
+  const forceMock = options.forceMock === true;
   const watermark = dbApi.getConnectorWatermark(db, "bank") || "";
   let rows;
-  let mode = "mock";
+  let mode = "live";
 
   if (forceMock) {
+    mode = "mock";
     rows = [
       {
         id: "bank-tx-9001",
@@ -263,7 +271,6 @@ async function runBank(db, options = {}) {
   } else {
     const data = await Net.call("bank");
     rows = Array.isArray(data.transactions) ? data.transactions : [];
-    mode = "live";
   }
 
   const emitted = [];
@@ -285,12 +292,13 @@ async function runBank(db, options = {}) {
 }
 
 async function runSimpleFin(db, options = {}) {
-  const forceMock = options.forceMock !== false;
+  const forceMock = options.forceMock === true;
   try {
     return await simplefin.syncToDb(db, {
       forceMock,
       fetchImpl: options.fetchImpl,
-      updateOpeningBalance: false
+      // Default on: opening balances track SimpleFIN so invested/cash aren't $0.
+      updateOpeningBalance: options.updateOpeningBalance !== false
     });
   } catch (error) {
     if (forceMock) throw error;
@@ -307,14 +315,78 @@ async function runSimpleFin(db, options = {}) {
   }
 }
 
+async function runRewards(db, options = {}) {
+  const forceMock = options.forceMock === true;
+  try {
+    return await rewardsWeb.syncRewards(db, {
+      forceMock,
+      fetchImpl: options.fetchImpl
+    });
+  } catch (error) {
+    if (forceMock) throw error;
+    return {
+      source: "rewards",
+      mode: "skipped",
+      error: error.message || String(error),
+      amexStatus: "seed_only",
+      upserted: 0,
+      offers: []
+    };
+  }
+}
+
+async function runCanvas(db, options = {}) {
+  const forceMock = options.forceMock === true;
+  try {
+    return await canvas.syncToDb(db, {
+      forceMock,
+      fetchImpl: options.fetchImpl
+    });
+  } catch (error) {
+    if (forceMock) throw error;
+    return {
+      source: "canvas",
+      mode: "skipped",
+      error: error.message || String(error),
+      emitted: [],
+      counts: { todo: 0, upcoming: 0, missing: 0, signals: 0 }
+    };
+  }
+}
+
 async function runAll(db, options = {}) {
-  const forceMock = options.forceMock !== false;
-  const groupme = await runGroupMe(db, { forceMock });
-  const sms = await runSms(db, { forceMock });
-  const email = await runEmail(db, { forceMock });
-  const bank = await runBank(db, { forceMock });
-  const simplefinResult = await runSimpleFin(db, options);
-  return { groupme, sms, email, bank, simplefin: simplefinResult };
+  const forceMock = options.forceMock === true;
+
+  async function soft(name, fn) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (forceMock) throw error;
+      return {
+        source: name,
+        mode: "skipped",
+        error: error.message || String(error),
+        emitted: []
+      };
+    }
+  }
+
+  const groupme = await soft("groupme", () => runGroupMe(db, { forceMock }));
+  const sms = await soft("sms", () => runSms(db, { forceMock }));
+  const email = await soft("email", () => runEmail(db, { forceMock }));
+  const bank = await soft("bank", () => runBank(db, { forceMock }));
+  const canvasResult = await runCanvas(db, { ...options, forceMock });
+  const simplefinResult = await runSimpleFin(db, { ...options, forceMock });
+  const rewards = await runRewards(db, { ...options, forceMock });
+  return {
+    groupme,
+    sms,
+    email,
+    bank,
+    canvas: canvasResult,
+    simplefin: simplefinResult,
+    rewards
+  };
 }
 
 module.exports = {
@@ -322,6 +394,8 @@ module.exports = {
   runSms,
   runEmail,
   runBank,
+  runCanvas,
   runSimpleFin,
+  runRewards,
   runAll
 };

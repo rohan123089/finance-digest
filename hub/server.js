@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const http = require("node:http");
 const fs = require("node:fs");
@@ -10,6 +10,8 @@ const sync = require("./sync.js");
 const cryptoUtil = require("./crypto.js");
 const connectors = require("./connectors/index.js");
 const simplefin = require("./connectors/simplefin.js");
+const gmail = require("./connectors/gmail.js");
+const canvas = require("./connectors/canvas.js");
 const ai = require("./ai.js");
 const pairing = require("./pairing.js");
 const importer = require("./import/index.js");
@@ -151,6 +153,7 @@ function createServer(db, options = {}) {
             aiMode: ai.getAiMode(db),
             pairingPath: "/apps/hub/pairing.html",
             homePath: "/apps/app.html",
+            appPath: "/apps/app.html",
             lifeCapture: true
           });
         }
@@ -369,6 +372,125 @@ function createServer(db, options = {}) {
           });
         }
 
+        if (req.method === "GET" && pathname === "/api/gmail/status") {
+          return sendJson(res, 200, await gmail.getStatus());
+        }
+
+        if (req.method === "POST" && pathname === "/api/gmail/client") {
+          const body = await readBody(req);
+          try {
+            const result = await gmail.saveClientCredentials(
+              body.clientId,
+              body.clientSecret
+            );
+            return sendJson(res, 200, result);
+          } catch (error) {
+            return sendJson(res, 400, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "GET" && pathname === "/api/gmail/auth-url") {
+          try {
+            const result = await gmail.buildAuthUrl({ host: HOST, port: PORT });
+            return sendJson(res, 200, result);
+          } catch (error) {
+            return sendJson(res, 400, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "GET" && pathname === "/api/gmail/callback") {
+          const url = new URL(req.url, `http://${HOST}:${PORT}`);
+          const err = url.searchParams.get("error");
+          const code = url.searchParams.get("code");
+          const state = url.searchParams.get("state");
+          const fail = (message) => {
+            res.writeHead(302, {
+              Location: `/apps/hub/gmail.html?error=${encodeURIComponent(message)}`
+            });
+            res.end();
+          };
+          if (err) return fail(err);
+          if (!code) return fail("Missing authorization code");
+          if (!gmail.consumeOAuthState(state)) {
+            return fail("OAuth state expired or invalid — try Connect again");
+          }
+          try {
+            const result = await gmail.exchangeCode(code, {
+              host: HOST,
+              port: PORT,
+              fetchImpl: options.fetchImpl
+            });
+            const emailQs = result.email
+              ? `&email=${encodeURIComponent(result.email)}`
+              : "";
+            res.writeHead(302, {
+              Location: `/apps/hub/gmail.html?connected=1${emailQs}`
+            });
+            res.end();
+          } catch (error) {
+            return fail(error.message || String(error));
+          }
+          return;
+        }
+
+        if (req.method === "POST" && pathname === "/api/gmail/test") {
+          try {
+            const result = await connectors.runEmail(db, { forceMock: false });
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, {
+              ok: true,
+              mode: result.mode,
+              emitted: result.emitted.length
+            });
+          } catch (error) {
+            return sendJson(res, 502, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/gmail/disconnect") {
+          await gmail.disconnect();
+          return sendJson(res, 200, { ok: true });
+        }
+
+        if (req.method === "GET" && pathname === "/api/canvas/status") {
+          return sendJson(res, 200, await canvas.getStatus());
+        }
+
+        if (req.method === "POST" && pathname === "/api/canvas/client") {
+          const body = await readBody(req);
+          try {
+            const result = await canvas.saveCredentials(body.baseUrl, body.token);
+            return sendJson(res, 200, result);
+          } catch (error) {
+            return sendJson(res, 400, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/canvas/test") {
+          const body = await readBody(req);
+          try {
+            const result = await connectors.runCanvas(db, {
+              forceMock: body.forceMock === true,
+              fetchImpl: options.fetchImpl
+            });
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, {
+              ok: true,
+              mode: result.mode,
+              emitted: result.emitted.length,
+              counts: result.counts,
+              error: result.error || null
+            });
+          } catch (error) {
+            return sendJson(res, 502, { error: error.message || String(error) });
+          }
+        }
+
+        if (req.method === "POST" && pathname === "/api/canvas/disconnect") {
+          await canvas.disconnect();
+          return sendJson(res, 200, { ok: true });
+        }
+
         if (req.method === "GET" && pathname === "/api/snapshot") {
           const snapshot = dbApi.computeLiveSnapshot(db);
           return sendJson(res, 200, {
@@ -429,7 +551,7 @@ function createServer(db, options = {}) {
           const card = await pairing.buildPairing(projectRoot, {
             hubUrl: `http://${HOST}:${PORT}`
           });
-          // Return QR SVG + fingerprint only ΓÇö do not also echo the raw key JSON.
+          // Return QR SVG + fingerprint only — do not also echo the raw key JSON.
           return sendJson(res, 200, {
             fingerprint: card.fingerprint,
             hub: card.hub,
@@ -453,8 +575,9 @@ function createServer(db, options = {}) {
 
         if (req.method === "POST" && pathname === "/api/connectors/run") {
           const body = await readBody(req);
-          // Default mock so a casual POST never hits live GroupMe.
-          const forceMock = body.forceMock !== false;
+          // Opt-in mock only — default is live-or-skip so casual runs never
+          // write fake GroupMe/email/bank rows into the real database.
+          const forceMock = body.forceMock === true;
           const result = await connectors.runAll(db, { forceMock });
           await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, {
@@ -474,6 +597,11 @@ function createServer(db, options = {}) {
             bank: {
               mode: result.bank.mode,
               emitted: result.bank.emitted.length
+            },
+            canvas: {
+              mode: result.canvas.mode,
+              emitted: result.canvas.emitted.length,
+              error: result.canvas.error || null
             },
             simplefin: {
               mode: result.simplefin.mode,
@@ -646,6 +774,8 @@ async function main() {
     console.log(`Digest UI: http://${HOST}:${PORT}/apps/digest/digest.html`);
     console.log(`Pair phone: http://${HOST}:${PORT}/apps/hub/pairing.html`);
     console.log(`SimpleFIN:  http://${HOST}:${PORT}/apps/hub/simplefin.html`);
+    console.log(`Gmail:      http://${HOST}:${PORT}/apps/hub/gmail.html`);
+    console.log(`Canvas:     http://${HOST}:${PORT}/apps/hub/canvas.html`);
     console.log(`Encrypted DB key: ${secretStore.SERVICE} in the OS keychain`);
     console.log(`Sync folder: ${SYNC_ROOT}`);
   });

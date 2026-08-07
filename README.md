@@ -279,6 +279,10 @@ id/secret (redirect URI must be exactly
 **Test pull** runs the live email connector into Digest. Secrets stay in the OS
 keychain.
 
+Canvas LMS: open <http://127.0.0.1:8787/apps/hub/canvas.html>, paste your school
+Canvas base URL + a personal access token (Account → Settings → New Access Token).
+Assignments and upcoming events land in Digest as school tasks.
+
 Still **live-or-skip by default** (`npm run connectors:once`). Mock data is
 opt-in only (`HUB_CONNECTORS_MOCK=1` or `{ "forceMock": true }`) and should not
 be used against your real database.

@@ -58,11 +58,21 @@ Every transaction resolves to `{ account, direction, category }`.
 - `runwayMonths = liquid / avg monthly expenses`
 - `owed` = external accounts' running balances (charges − reimbursements).
 
-**Safe-to-spend:**
+**Safe-to-spend (pay-period cashflow):**
 
-`safeToSpend = weeklyIncome − thisWeekCommitted(recurring) − weeklySavingsTarget − variableAlreadySpentThisWeek`
+Detect recurring **income** and **expense** streams from transactions (weekly /
+biweekly / monthly cadences). The horizon is **last payday → next payday**
+(calendar week if income cadence is unknown). Overlapping bills and charges that
+fall inside that window count even when their own cycle started earlier.
 
-Make `weeklySavingsTarget` and `weeklyIncome` config values (default income = monthly / 4.345). Show this number large at the top of the UI.
+`safeToSpend = periodIncome − commitmentsInHorizon − savingsForHorizon − variableSpentSincePayday`
+
+- `periodIncome` = income already received this pay period + income still expected before next payday
+- `commitmentsInHorizon` = recurring charges and standing bills due in the window
+- `savingsForHorizon` = `weeklySavingsTarget × (horizonDays / 7)`
+- `variableSpentSincePayday` = non-recurring outflows since the last payday
+
+No manual weekly/monthly income reference — income comes from the transaction stream.
 
 ## Milestone 1 — the money review loop
 

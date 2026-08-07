@@ -94,13 +94,13 @@ async function main() {
     format: "csv"
   });
   assert.equal(parsed.rows.length, 2);
-  const first = importer.importText(emptyDb, {
+  const first = await importer.importText(emptyDb, {
     accountId: "uwcu-checking",
     text: csv,
     format: "csv"
   });
   assert.equal(first.inserted, 2);
-  const second = importer.importText(emptyDb, {
+  const second = await importer.importText(emptyDb, {
     accountId: "uwcu-checking",
     text: csv,
     format: "csv"
@@ -120,7 +120,7 @@ async function main() {
     "</STMTTRN>",
     "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>"
   ].join("\n");
-  const ofxResult = importer.importText(emptyDb, {
+  const ofxResult = await importer.importText(emptyDb, {
     accountId: "amex",
     text: ofx,
     format: "ofx"
@@ -128,20 +128,101 @@ async function main() {
   assert.equal(ofxResult.format, "ofx");
   assert.equal(ofxResult.inserted, 1);
 
-  // SimpleFIN mock sync after mapping
+  // UWCU-style PDF statement text (combined checking + savings)
+  const pdfText = fs.readFileSync(
+    path.join(__dirname, "../sample-data/uwcu-statement-sample.txt"),
+    "utf8"
+  );
+  const pdfParsed = parseImport({
+    text: pdfText,
+    accountId: "uwcu-checking",
+    accountType: "cash",
+    format: "pdf"
+  });
+  assert.ok(pdfParsed.rows.length >= 8);
+  const checkingRows = pdfParsed.rows.filter((r) => r.account === "uwcu-checking");
+  const savingsRows = pdfParsed.rows.filter((r) => r.account === "uwcu-savings");
+  assert.ok(checkingRows.length >= 6);
+  assert.ok(savingsRows.length >= 2);
+  assert.ok(checkingRows.some((r) => /Versailles/i.test(r.rawMerchant) && r.directionHint === "out"));
+  assert.ok(checkingRows.some((r) => /Zelle/i.test(r.rawMerchant) && r.directionHint === "in"));
+  assert.ok(savingsRows.some((r) => /MOBILE DEPOSIT/i.test(r.rawMerchant)));
+  const pdfImport = await importer.importText(emptyDb, {
+    accountId: "uwcu-auto",
+    text: pdfText,
+    format: "pdf",
+    label: "uwcu-july-sample.pdf"
+  });
+  assert.equal(pdfImport.format, "pdf");
+  assert.ok(pdfImport.inserted >= 8);
+  assert.ok(pdfImport.batchId);
+  assert.ok(pdfImport.byAccount["uwcu-checking"] >= 1);
+  assert.ok(pdfImport.byAccount["uwcu-savings"] >= 1);
+
+  const batches = dbApi.listImportBatches(emptyDb);
+  assert.ok(batches.some((b) => b.id === pdfImport.batchId));
+  assert.equal(
+    batches.find((b) => b.id === pdfImport.batchId).label,
+    "uwcu-july-sample.pdf"
+  );
+
+  const undone = dbApi.deleteImportBatch(emptyDb, pdfImport.batchId);
+  assert.equal(undone.deletedTransactions, pdfImport.inserted);
+  assert.equal(
+    dbApi.listTransactions(emptyDb).filter((tx) => String(tx.id).startsWith("pdf:")).length,
+    0
+  );
+
+  // SimpleFIN mock sync after mapping — signs match live protocol
   dbApi.updateAccount(emptyDb, "amex", { simplefinAccountId: "sf-amex-1" });
   const beforeSf = dbApi.listTransactions(emptyDb).length;
   const sf = await simplefin.syncToDb(emptyDb, { forceMock: true });
   assert.equal(sf.mode, "mock");
   assert.ok(sf.inserted >= 1);
   assert.equal(dbApi.listTransactions(emptyDb).length, beforeSf + sf.inserted);
+
+  assert.equal(simplefin.directionHintFromSigned(-42.17, "liability"), "out");
+  assert.equal(simplefin.directionHintFromSigned(200, "liability"), "in");
+  assert.equal(simplefin.directionHintFromSigned(-10, "cash"), "out");
+
+  const traderJoe = dbApi.listTransactions(emptyDb).find((tx) =>
+    /trader joe/i.test(tx.rawMerchant || tx.merchant)
+  );
+  assert.ok(traderJoe);
+  assert.equal(traderJoe.direction, "out");
+  assert.equal(traderJoe.category, "groceries");
+
+  const paymentSf = dbApi.listTransactions(emptyDb).find((tx) =>
+    /payment received/i.test(tx.rawMerchant || tx.merchant)
+  );
+  assert.ok(paymentSf);
+  assert.equal(paymentSf.direction, "in");
+
   const venmoSf = dbApi.listTransactions(emptyDb).find((tx) =>
     /venmo/i.test(tx.rawMerchant || tx.merchant)
   );
   assert.ok(venmoSf);
   assert.equal(venmoSf.needsReview, true);
 
+  // Re-sync corrects a previously inverted liability direction
+  emptyDb
+    .prepare(
+      `UPDATE transactions SET direction = 'in', category = 'income', committed_at = ?
+       WHERE id = ?`
+    )
+    .run(new Date().toISOString(), traderJoe.id);
+  const repaired = await simplefin.syncToDb(emptyDb, { forceMock: true });
+  assert.ok(repaired.updated >= 1);
+  const traderJoeFixed = dbApi
+    .listTransactions(emptyDb)
+    .find((tx) => tx.id === traderJoe.id);
+  assert.equal(traderJoeFixed.direction, "out");
+  assert.equal(traderJoeFixed.category, "groceries");
+  assert.equal(traderJoeFixed.committedAt, null);
+
   // Claim + access URL parsing helpers
+  assert.equal(simplefin.modelBalanceFromRemote(-2895.24, "liability"), 2895.24);
+  assert.equal(simplefin.modelBalanceFromRemote(19930.59, "investment"), 19930.59);
   const claimUrl = "https://bridge.example/claim/abc";
   const setupToken = Buffer.from(claimUrl).toString("base64");
   assert.equal(simplefin.decodeSetupToken(setupToken), claimUrl);
@@ -216,7 +297,28 @@ async function main() {
   const money = await request(port, "GET", "/apps/money/money.html");
   assert.equal(money.status, 200);
   assert.match(money.text, /import-file/);
+  assert.match(money.text, /import-batches/);
   assert.match(money.text, /simplefin/);
+
+  const importsList = await request(port, "GET", "/api/imports");
+  assert.equal(importsList.status, 200);
+  assert.ok(Array.isArray(importsList.body.batches));
+
+  const labeled = await request(port, "POST", "/api/import", {
+    accountId: "discover",
+    text: "Date,Description,Amount\n2026-08-05,SPOTIFY,-10.99\n",
+    format: "csv",
+    label: "discover-test.csv"
+  });
+  assert.equal(labeled.status, 200);
+  assert.ok(labeled.body.batchId);
+  const undo = await request(
+    port,
+    "DELETE",
+    `/api/imports/${encodeURIComponent(labeled.body.batchId)}`
+  );
+  assert.equal(undo.status, 200);
+  assert.equal(undo.body.deletedTransactions, 1);
 
   server.close();
   emptyDb.close();

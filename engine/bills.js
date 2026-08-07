@@ -71,6 +71,8 @@
     const rows = [];
     list.forEach((bill) => {
       if (!bill || bill.active === false) return;
+      // $0 templates are placeholders — don't surface as payment reminders.
+      if (!(Number(bill.amount) > 0) && options.includeZero !== true) return;
       const next = nextDueForBill(bill, asOfDate);
       const lead = Math.max(0, Number(bill.leadDays != null ? bill.leadDays : 3));
       const until = daysUntil(next.dueAt, asOfDate);

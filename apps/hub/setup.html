@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub setup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121922;
+      --line: #283544;
+      --text: #edf3f8;
+      --muted: #91a0ad;
+      --accent: #5ee0a0;
+      --warn: #ffcf66;
+      --danger: #ff7b7b;
+      --blue: #74b9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(720px, 94vw); margin: 0 auto; padding: 24px 0 56px; }
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .nav a {
+      color: var(--blue);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .nav a.back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #18212c;
+      color: var(--text);
+      padding: 7px 12px;
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 4px 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    section {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    section h2 { margin: 0 0 6px; font-size: 16px; }
+    section p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    button, select {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #18212c;
+      color: var(--text);
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    a.goto {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #18212c;
+      color: var(--text);
+      text-decoration: none;
+      padding: 8px 12px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .pill.on { background: #143528; color: var(--accent); }
+    .pill.off { background: #2a1c1c; color: #ff9b9b; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 10px; }
+    .ok { color: var(--accent); }
+    .error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="nav">
+      <a class="back" href="/apps/hub/home.html">← Exit setup</a>
+      <a href="/apps/app.html">Open app</a>
+    </div>
+
+    <div class="eyebrow">Laptop only</div>
+    <h1>Setup</h1>
+    <p class="sub">Connect banks, email, and phone sync. Leave anytime — Money and Digest stay on the app screen.</p>
+
+    <section>
+      <h2>Status</h2>
+      <p>What’s linked on this hub right now.</p>
+      <div id="status-pills">Loading…</div>
+      <div class="meta" id="status-meta"></div>
+    </section>
+
+    <section>
+      <h2>Phone pairing</h2>
+      <p>Scan a QR so Shelf on your phone shares the sync key.</p>
+      <a class="goto" href="/apps/hub/pairing.html">Open pairing →</a>
+    </section>
+
+    <section>
+      <h2>SimpleFIN</h2>
+      <p>Claim a bridge token, map Amex / Discover / Vanguard, sync live balances.</p>
+      <a class="goto" href="/apps/hub/simplefin.html">Open SimpleFIN →</a>
+    </section>
+
+    <section>
+      <h2>Gmail</h2>
+      <p>Pull statement mail, deadlines, and reading links into Digest.</p>
+      <a class="goto" href="/apps/hub/gmail.html">Open Gmail →</a>
+    </section>
+
+    <section>
+      <h2>Canvas</h2>
+      <p>Upcoming assignments and events from school Canvas → Digest school tasks.</p>
+      <a class="goto" href="/apps/hub/canvas.html">Open Canvas →</a>
+    </section>
+
+    <section>
+      <h2>AI nudges</h2>
+      <p>Optional. OFF keeps Digest quiet until you ask for proposals.</p>
+      <div class="row">
+        <select id="ai-mode" aria-label="AI mode">
+          <option value="OFF">OFF</option>
+          <option value="LOCAL">LOCAL</option>
+          <option value="CLOUD">CLOUD</option>
+        </select>
+        <button type="button" class="primary" id="ai-save">Save</button>
+      </div>
+      <div class="meta" id="ai-status"></div>
+    </section>
+
+    <section>
+      <h2>Run connectors once</h2>
+      <p>Live-or-skip by default (no mock data). Needs secrets above where used.</p>
+      <div class="row">
+        <button type="button" id="connectors-run">Run now</button>
+      </div>
+      <div class="meta" id="connectors-status"></div>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    function pill(label, on) {
+      return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "on" : "off"}</span>`;
+    }
+
+    async function refreshStatus() {
+      const pills = document.querySelector("#status-pills");
+      const meta = document.querySelector("#status-meta");
+      try {
+        const res = await fetch("/api/health");
+        const h = await res.json();
+        if (!res.ok) throw new Error(h.error || "health failed");
+        const c = h.connectors || {};
+        pills.innerHTML = [
+          pill("SimpleFIN", Boolean(c["simplefin.accessUrl"])),
+          pill("Gmail", Boolean(c["email.refreshToken"])),
+          pill("Canvas", Boolean(c["canvas.token"])),
+          pill("GroupMe", Boolean(c["groupme.token"])),
+          pill("Bank JSON", Boolean(c["bank.token"]))
+        ].join("");
+        meta.textContent = `Fingerprint ${h.syncKeyFingerprint || "—"} · AI ${h.aiMode || "OFF"}`;
+        const mode = document.querySelector("#ai-mode");
+        if (h.aiMode && [...mode.options].some((o) => o.value === h.aiMode)) {
+          mode.value = h.aiMode;
+        }
+      } catch (error) {
+        pills.innerHTML = `<span class="error">${error.message || error}</span>`;
+      }
+    }
+
+    document.querySelector("#ai-save").addEventListener("click", async () => {
+      const status = document.querySelector("#ai-status");
+      status.textContent = "Saving…";
+      try {
+        const mode = document.querySelector("#ai-mode").value;
+        const res = await fetch("/api/ai/mode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode })
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || "save failed");
+        status.innerHTML = `<span class="ok">AI mode → ${body.mode}</span>`;
+        await refreshStatus();
+      } catch (error) {
+        status.innerHTML = `<span class="error">${error.message || error}</span>`;
+      }
+    });
+
+    document.querySelector("#connectors-run").addEventListener("click", async () => {
+      const status = document.querySelector("#connectors-status");
+      status.textContent = "Running…";
+      try {
+        const res = await fetch("/api/connectors/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ forceMock: false })
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || "run failed");
+        const parts = ["groupme", "email", "bank", "canvas", "simplefin", "sms", "rewards"]
+          .filter((k) => body[k])
+          .map((k) => `${k}:${body[k].mode || "?"}`);
+        status.innerHTML = `<span class="ok">${parts.join(" · ") || "done"}</span>`;
+      } catch (error) {
+        status.innerHTML = `<span class="error">${error.message || error}</span>`;
+      }
+    });
+
+    refreshStatus();
+  </script>
+</body>
+</html>

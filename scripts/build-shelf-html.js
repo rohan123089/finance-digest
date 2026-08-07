@@ -199,10 +199,10 @@ ${model}
 ${bills}
   </script>
   <script>
-${mockShelf}
+${hubShelf}
   </script>
   <script>
-${hubShelf}
+${mockShelf}
   </script>
   <script>
   "use strict";

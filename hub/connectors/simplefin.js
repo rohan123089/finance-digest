@@ -7,6 +7,7 @@
 
 const dbApi = require("../db.js");
 const secretStore = require("../secret-store.js");
+const Model = require("../../engine/model.js");
 
 function decodeSetupToken(setupToken) {
   const trimmed = String(setupToken || "").trim();
@@ -89,12 +90,28 @@ function epochToDate(value) {
   return new Date(seconds * 1000).toISOString().slice(0, 10);
 }
 
-function directionHintFromSigned(amount, accountType) {
+/**
+ * SimpleFIN signs are uniform across account types:
+ * positive = money into the account, negative = money out.
+ * Credit-card purchases are negative; payments/credits are positive.
+ * (Do not use Amex-CSV “positive = charge” here.)
+ */
+function directionHintFromSigned(amount, _accountType) {
   if (!Number.isFinite(amount) || amount === 0) return "";
-  if (accountType === "liability" || accountType === "external") {
-    return amount > 0 ? "out" : "in";
-  }
   return amount < 0 ? "out" : "in";
+}
+
+/**
+ * SimpleFIN: assets positive, debts negative.
+ * Model: cash/investment positive owned; liability/external positive owed.
+ */
+function modelBalanceFromRemote(remoteBalance, accountType) {
+  const value = Number(remoteBalance);
+  if (!Number.isFinite(value)) return null;
+  if (accountType === "liability" || accountType === "external") {
+    return -value;
+  }
+  return value;
 }
 
 function listRemoteAccounts(payload) {
@@ -121,27 +138,35 @@ async function syncToDb(db, options = {}) {
 
   if (forceMock) {
     mode = "mock";
+    // Signs match live SimpleFIN: debts have negative balances;
+    // purchases negative, payments/credits positive.
     payload = {
       accounts: [
         {
           id: "sf-amex-1",
           name: "Amex Blue",
           currency: "USD",
-          balance: "120.50",
+          balance: "-120.50",
           "balance-date": Math.floor(Date.now() / 1000),
           org: { name: "American Express" },
           transactions: [
             {
               id: "sf-tx-1",
               posted: Math.floor(Date.now() / 1000) - 86400,
-              amount: "42.17",
+              amount: "-42.17",
               description: "TRADER JOE'S #1"
             },
             {
               id: "sf-tx-2",
               posted: Math.floor(Date.now() / 1000) - 3600,
-              amount: "25.00",
+              amount: "-25.00",
               description: "VENMO PAYMENT 9911"
+            },
+            {
+              id: "sf-tx-3",
+              posted: Math.floor(Date.now() / 1000) - 7200,
+              amount: "200.00",
+              description: "PAYMENT RECEIVED - THANK YOU"
             }
           ]
         }
@@ -162,6 +187,8 @@ async function syncToDb(db, options = {}) {
   const remote = listRemoteAccounts(payload);
   const emitted = [];
   const unmapped = [];
+  let insertedCount = 0;
+  let updatedCount = 0;
 
   (payload.accounts || []).forEach((remoteAccount) => {
     const sfId = String(remoteAccount.id);
@@ -187,9 +214,36 @@ async function syncToDb(db, options = {}) {
       return;
     }
 
-    const balance = Number(remoteAccount.balance);
-    if (Number.isFinite(balance) && options.updateOpeningBalance) {
-      dbApi.updateAccount(db, local.id, { openingBalance: balance });
+    const remoteBalance = Number(remoteAccount.balance);
+    const modelBalance = modelBalanceFromRemote(remoteBalance, local.type);
+    const shouldUpdateOpening =
+      options.updateOpeningBalance !== false && modelBalance != null;
+    if (shouldUpdateOpening) {
+      // Reconcile: opening + activity from stored txs = institution balance.
+      // Otherwise invested/cash stay at $0 while only recent tx deltas show.
+      const maps = dbApi.getAccountMaps(db);
+      const activity = Model.accountActivityDelta(
+        dbApi.listTransactions(db).filter((tx) => {
+          if (tx.account === local.id) return true;
+          if (tx.direction !== "transfer") return false;
+          const target = tx.transferAccount || tx.suggestedTransferAccount;
+          return target === local.id;
+        }),
+        local.id,
+        local.type,
+        maps.accountTypes
+      );
+      const opening = Model.openingFromRemoteBalance(modelBalance, activity);
+      const holdings = Model.normalizeHoldings(remoteAccount.holdings || []);
+      dbApi.updateAccount(db, local.id, {
+        openingBalance: opening,
+        holdings
+      });
+      local = dbApi.getAccount(db, local.id);
+    } else if (Array.isArray(remoteAccount.holdings)) {
+      dbApi.updateAccount(db, local.id, {
+        holdings: Model.normalizeHoldings(remoteAccount.holdings)
+      });
     }
 
     const txs = Array.isArray(remoteAccount.transactions)
@@ -206,19 +260,28 @@ async function syncToDb(db, options = {}) {
         account: local.id,
         directionHint: directionHintFromSigned(amount, local.type)
       };
-      const result = dbApi.insertRawTransaction(db, raw);
-      if (result.inserted) emitted.push(raw);
+      const result = dbApi.upsertRawTransactionFromSync(db, raw);
+      if (result.inserted) {
+        insertedCount += 1;
+        emitted.push(raw);
+      } else if (result.updated) {
+        updatedCount += 1;
+        emitted.push(raw);
+      }
     });
   });
 
   dbApi.setConnectorWatermark(db, "simplefin", new Date().toISOString());
+  const linked = dbApi.linkInternalTransfers(db);
   return {
     source: "simplefin",
     mode,
     remote,
     unmapped,
     emitted,
-    inserted: emitted.length
+    inserted: insertedCount,
+    updated: updatedCount,
+    linkedTransfers: linked.linked || 0
   };
 }
 
@@ -228,5 +291,7 @@ module.exports = {
   claimSetupToken,
   fetchAccounts,
   listRemoteAccounts,
+  modelBalanceFromRemote,
+  directionHintFromSigned,
   syncToDb
 };

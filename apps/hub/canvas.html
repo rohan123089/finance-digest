@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canvas connect</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #edf3f8;
+      font: 14px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    main { width: min(720px, 94vw); margin: 0 auto; padding: 28px 0 48px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.03em; }
+    .sub { color: #91a0ad; margin: 0 0 20px; }
+    section {
+      border: 1px solid #283544;
+      border-radius: 12px;
+      background: #121922;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    h2 { margin: 0 0 10px; font-size: 15px; }
+    label { display: block; color: #91a0ad; font-size: 12px; margin: 10px 0 6px; }
+    input, button {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid #283544;
+      background: #18212c;
+      color: #edf3f8;
+      padding: 8px 10px;
+    }
+    input { width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; }
+    button.primary {
+      background: #5ee0a0;
+      color: #062316;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    button.danger { border-color: #7b3030; color: #ff9b9b; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .meta { color: #91a0ad; font-size: 12px; margin-top: 10px; }
+    .error { color: #ff7b7b; }
+    .ok { color: #5ee0a0; }
+    ol { margin: 0; padding-left: 18px; color: #c5d0d8; }
+    li { margin: 6px 0; }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .pill.on { background: #143528; color: #5ee0a0; }
+    .pill.off { background: #2a1c1c; color: #ff9b9b; }
+    a { color: #74b9ff; }
+    .nav { margin-bottom: 16px; }
+    .nav a { color: #91a0ad; text-decoration: none; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="nav"><a href="/apps/hub/setup.html">← Setup</a></div>
+    <h1>Canvas</h1>
+    <p class="sub">
+      Pull upcoming assignments and calendar events into Digest as school tasks.
+      Uses your personal Canvas access token — no school admin app required.
+    </p>
+
+    <section>
+      <h2>Status</h2>
+      <div id="status-pills"></div>
+      <div class="meta" id="status-detail">Loading…</div>
+    </section>
+
+    <section>
+      <h2>1 · Create an access token</h2>
+      <ol>
+        <li>Open your school Canvas (e.g. <code>https://canvas.wisc.edu</code>).</li>
+        <li>Account → <strong>Settings</strong> → <strong>New Access Token</strong> (Approved Integrations).</li>
+        <li>Purpose: <code>Life hub</code>. Set an expiration if required (students often must).</li>
+        <li>Copy the token once — Canvas won’t show it again.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>2 · Save on this laptop</h2>
+      <label for="base-url">Canvas base URL</label>
+      <input id="base-url" placeholder="https://canvas.wisc.edu" spellcheck="false" autocomplete="off">
+      <label for="token">Access token</label>
+      <input id="token" type="password" placeholder="Paste token" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button class="primary" id="save">Save to keychain</button>
+        <button class="primary" id="test">Test pull → Digest</button>
+        <button class="danger" id="disconnect">Disconnect</button>
+      </div>
+      <div class="meta" id="save-status"></div>
+    </section>
+
+    <section>
+      <h2>After connect</h2>
+      <ol>
+        <li>Click <strong>Test pull</strong> (or Setup → Run connectors once).</li>
+        <li>Open <a href="/apps/digest/digest.html">Digest</a> — school tasks show under Today.</li>
+      </ol>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const text = await response.text();
+      let payload = null;
+      try { payload = text ? JSON.parse(text) : null; } catch (_e) { payload = { error: text }; }
+      if (!response.ok) throw new Error((payload && payload.error) || "Request failed");
+      return payload;
+    }
+
+    function setMsg(el, text, ok) {
+      el.textContent = text || "";
+      el.className = "meta " + (ok === true ? "ok" : ok === false ? "error" : "");
+    }
+
+    function pill(label, on) {
+      return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "yes" : "no"}</span>`;
+    }
+
+    async function refreshStatus() {
+      const status = await api("/api/canvas/status");
+      document.querySelector("#status-pills").innerHTML =
+        pill("url", Boolean(status.baseUrl)) +
+        pill("token", status.token) +
+        pill("connected", status.connected);
+      document.querySelector("#status-detail").textContent = status.baseUrl
+        ? `Base: ${status.baseUrl}`
+        : "Not connected yet.";
+      if (status.baseUrl && !document.querySelector("#base-url").value) {
+        document.querySelector("#base-url").value = status.baseUrl;
+      }
+      return status;
+    }
+
+    document.querySelector("#save").addEventListener("click", async () => {
+      const el = document.querySelector("#save-status");
+      setMsg(el, "Saving…");
+      try {
+        await api("/api/canvas/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseUrl: document.querySelector("#base-url").value,
+            token: document.querySelector("#token").value
+          })
+        });
+        document.querySelector("#token").value = "";
+        setMsg(el, "Saved in Windows Credential Manager.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#test").addEventListener("click", async () => {
+      const el = document.querySelector("#save-status");
+      setMsg(el, "Pulling Canvas…");
+      try {
+        const payload = await api("/api/canvas/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        if (payload.mode === "skipped") {
+          setMsg(el, payload.error || "Skipped — not configured.", false);
+          return;
+        }
+        setMsg(
+          el,
+          `Live pull ok · ${payload.emitted} signal(s) · todo ${payload.counts?.todo ?? "?"} · upcoming ${payload.counts?.upcoming ?? "?"}. Open Digest.`,
+          true
+        );
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    document.querySelector("#disconnect").addEventListener("click", async () => {
+      if (!confirm("Remove Canvas secrets from the keychain?")) return;
+      const el = document.querySelector("#save-status");
+      try {
+        await api("/api/canvas/disconnect", { method: "POST" });
+        setMsg(el, "Disconnected.", true);
+        await refreshStatus();
+      } catch (error) {
+        setMsg(el, error.message, false);
+      }
+    });
+
+    refreshStatus().catch((error) => {
+      document.querySelector("#status-detail").textContent = error.message;
+      document.querySelector("#status-detail").className = "meta error";
+    });
+  </script>
+</body>
+</html>

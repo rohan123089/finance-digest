@@ -5,6 +5,7 @@ const path = require("node:path");
 const cryptoUtil = require("./crypto.js");
 const dbApi = require("./db.js");
 const life = require("../engine/life.js");
+const billsEngine = require("../engine/bills.js");
 
 const CURRENT_VERSION = 1;
 const PRIOR_VERSION = 0;
@@ -35,9 +36,51 @@ function executePendingActions(db) {
       dbApi.markActionExecuted(db, item.id, "executed", "Settings updated");
       return;
     }
+    if (item.type === "action.bills.upsert" && item.data) {
+      dbApi.upsertBill(db, item.data);
+      dbApi.markActionExecuted(db, item.id, "executed", "Bill upserted");
+      return;
+    }
+    if (item.type === "action.bills.delete" && item.data?.id) {
+      dbApi.deleteBill(db, item.data.id);
+      dbApi.markActionExecuted(db, item.id, "executed", "Bill deleted");
+      return;
+    }
+    if (
+      (item.type === "action.bill.paid" || item.type === "action.bill.pay") &&
+      item.data
+    ) {
+      const ref = item.data.targetRef || item.data;
+      let billId = ref.billId || null;
+      let period = ref.periodKey || null;
+      if (!billId && ref.itemId) {
+        const match = String(ref.itemId).match(/^(bill:[^:]+)(?::(\d{4}-\d{2}))?$/);
+        if (match) {
+          billId = match[1];
+          period = period || match[2] || null;
+        }
+      }
+      if (billId) {
+        dbApi.markBillPaid(db, billId, period);
+      }
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        billId ? `Marked ${billId} paid for ${period || "period"}` : "Bill pay missing id"
+      );
+      return;
+    }
 
     const targetId = item.data?.targetRef?.itemId;
     if (targetId && item.type === "action.dismiss") {
+      const billId = item.data?.targetRef?.billId;
+      const periodKey = item.data?.targetRef?.periodKey;
+      if (billId) {
+        dbApi.markBillPaid(db, billId, periodKey);
+        dbApi.markActionExecuted(db, item.id, "executed", `Dismissed bill ${billId}`);
+        return;
+      }
       const target = dbApi.listSyncItems(db).find((row) => row.id === targetId);
       const status = target?.type === "signal.event" ? "declined" : "done";
       dbApi.markActionExecuted(
@@ -128,6 +171,17 @@ function moneyTasksFromSnapshot(db) {
     });
   }
   return tasks;
+}
+
+/** Drop stale AI flags that no longer match the live redacted snapshot. */
+function aiFlagStillRelevant(flag, snapshot) {
+  if (!flag) return false;
+  const trigger = String(flag.trigger || flag.id || "").toLowerCase();
+  if (trigger.includes("owed")) return Number(snapshot.owed) > 0;
+  if (trigger.includes("safe")) return Number(snapshot.safeToSpend?.remaining) < 0;
+  if (trigger.includes("savings")) return Number(snapshot.savingsRatePct) < 20;
+  // Unknown flags: keep only if they look like current proposal content with no stale trigger.
+  return true;
 }
 
 function buildDigest(db) {
@@ -272,10 +326,48 @@ function buildDigest(db) {
     }
   });
 
-  // Latest AI proposal flags appear as read-only nudges. Proposals never mutate rows.
+  billsEngine.upcomingReminders(dbApi.listBills(db), asOfDate).forEach((row) => {
+    const id = `bill:${row.bill.id.replace(/^bill:/, "")}:${row.periodKey}`;
+    if (today.some((item) => item.id === id)) return;
+    today.push({
+      kind: "bill",
+      id,
+      title: billsEngine.reminderTitle(row),
+      start: row.dueAt,
+      dueAt: row.dueAt,
+      domain: "personal",
+      category: row.bill.category || null,
+      amount: row.bill.amount,
+      daysUntil: row.daysUntil,
+      overdue: row.overdue,
+      sortKey: row.dueAt ? Date.parse(row.dueAt) : Number.MAX_SAFE_INTEGER - 3,
+      actions: [
+        {
+          type: "bill.paid",
+          targetRef: {
+            itemId: id,
+            billId: row.bill.id,
+            periodKey: row.periodKey
+          }
+        },
+        {
+          type: "dismiss",
+          targetRef: {
+            itemId: id,
+            billId: row.bill.id,
+            periodKey: row.periodKey
+          }
+        }
+      ]
+    });
+  });
+
+  // Latest AI proposal flags appear as read-only nudges — only while still true.
+  const snapshot = dbApi.redactSnapshot(dbApi.computeLiveSnapshot(db));
   const latestProposal = dbApi.listAiProposals(db)[0];
   if (latestProposal && !latestProposal.accepted && Array.isArray(latestProposal.body?.flags)) {
     latestProposal.body.flags.forEach((flag) => {
+      if (!aiFlagStillRelevant(flag, snapshot)) return;
       const id = `ai:${latestProposal.id}:${flag.id}`;
       if (today.some((row) => row.id === id)) return;
       today.push({
@@ -297,7 +389,7 @@ function buildDigest(db) {
   }
 
   today.sort((a, b) => {
-    const kindOrder = { birthday: 0, event: 1, task: 2, import: 2, nudge: 3 };
+    const kindOrder = { birthday: 0, bill: 1, event: 2, task: 3, import: 3, nudge: 4 };
     const kindDiff = (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9);
     if (kindDiff !== 0) return kindDiff;
     if (a.kind === "task" && b.kind === "task") {
