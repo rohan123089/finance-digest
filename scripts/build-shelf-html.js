@@ -273,6 +273,25 @@ const html = `<!doctype html>
         } catch (_e) {}
       });
     });
+    // Watchdog: if boot never advances past Loading, surface a real error.
+    setTimeout(() => {
+      const b = document.querySelector("#bridge");
+      const err = document.querySelector("#boot-error");
+      if (!b) return;
+      if (!/^(Loading|Starting)/i.test(String(b.textContent || "").trim())) return;
+      b.textContent = "Stuck loading — retrying…";
+      if (err) {
+        err.hidden = false;
+        err.textContent =
+          "Boot stalled. Use http://127.0.0.1:8787/apps/app.html with the hub running, then hard-refresh.";
+      }
+      if (typeof window.__lifeBoot === "function") {
+        window.__lifeBoot().catch((e) => {
+          b.textContent = "Failed to start";
+          if (err) err.textContent = "Failed: " + (e && e.message ? e.message : e);
+        });
+      }
+    }, 8000);
   })();
   </script>
   <script>
@@ -876,6 +895,8 @@ ${hubShelf}
   async function boot() {
     const bridge = document.querySelector("#bridge");
     const cache = readCache();
+    loadStartedAt.t = Date.now();
+    setProgress("Connecting to hub…", 0, 3);
     if (cache?.snapshot && Array.isArray(cache.transactions)) {
       state.transactions = cache.transactions.map((r) => ({ ...r }));
       state.snapshot = cache.snapshot;
@@ -888,14 +909,23 @@ ${hubShelf}
     } else if (bridge) {
       bridge.textContent = "Connecting to hub…";
     }
-    loadStartedAt.t = Date.now();
-    await waitForShelf(12000);
+    try {
+      await waitForShelf(5000);
+    } catch (e) {
+      if (location.protocol === "file:" && typeof window.__lifeInstallOfflineEngines === "function") {
+        window.__lifeInstallOfflineEngines();
+        await waitForShelf(5000);
+      } else {
+        throw e;
+      }
+    }
     setBridgeLabel();
     try {
       await withTimeout(refreshMoney(), 20000, "Money load");
     } catch (e) {
       document.querySelector("#money-status").textContent = e.message || String(e);
       document.querySelector("#safe-detail").textContent = "Hub data load failed — check hub is running";
+      if (bridge) bridge.textContent = "Money load failed";
     }
     try {
       await withTimeout(loadDigest(), 20000, "Digest load");
@@ -903,7 +933,6 @@ ${hubShelf}
       document.querySelector("#digest-status").textContent = e.message || String(e);
     }
     const elapsed = Math.max(1, Math.round((Date.now() - (loadStartedAt.t || Date.now())) / 1000));
-    const mode = readCache()?.txCursor ? "delta-ready" : "full";
     clearProgress("Caught up in " + elapsed + "s · next opens use changes only");
     setBridgeLabel();
     if (document.querySelector("#tab-sync")?.classList.contains("on")) {
@@ -930,23 +959,44 @@ ${hubShelf}
 
   window.__lifeBoot = boot;
   </script>
-  <script>
+  <!-- Offline engines are not JS-parsed until needed (hub path stays fast). -->
+  <script type="text/plain" id="src-rules">
 ${rules}
   </script>
-  <script>
+  <script type="text/plain" id="src-model">
 ${model}
   </script>
-  <script>
+  <script type="text/plain" id="src-bills">
 ${bills}
   </script>
-  <script>
+  <script type="text/plain" id="src-mock">
 ${mockShelf}
   </script>
   <script>
   (function () {
     "use strict";
+
+    function installOfflineEngines() {
+      if (window.__lifeOfflineEngines) return;
+      ["src-rules", "src-model", "src-bills", "src-mock"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const code = el.textContent || "";
+        if (!code.trim()) return;
+        const s = document.createElement("script");
+        s.text = code;
+        document.head.appendChild(s);
+      });
+      window.__lifeOfflineEngines = true;
+    }
+
+    window.__lifeInstallOfflineEngines = installOfflineEngines;
+
+    // Hub doorway: do not install offline engines.
     if (window.Shelf && Shelf.__hub) return;
-    if (!(window.Shelf && typeof Shelf.data?.get === "function")) return;
+
+    // file:// / no hub: install mock stack, then boot.
+    installOfflineEngines();
     const bridge = document.querySelector("#bridge");
     const stuck = bridge && /Connecting|Loading|Starting|Failed/i.test(bridge.textContent || "");
     if (stuck && typeof window.__lifeBoot === "function") {
