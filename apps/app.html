@@ -229,6 +229,789 @@
   </div>
 
   <script>
+  // Wire tabs immediately so the UI stays usable while larger scripts parse.
+  (function () {
+    "use strict";
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Loading…";
+    document.querySelectorAll(".tabs button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
+        const panel = document.querySelector("#tab-" + btn.dataset.tab);
+        if (panel) panel.classList.add("on");
+        try {
+          if (btn.dataset.tab === "sync" && typeof window.__lifeLoadDoorway === "function") {
+            window.__lifeLoadDoorway();
+          }
+        } catch (_e) {}
+      });
+    });
+  })();
+  </script>
+  <script>
+/**
+ * Browser-to-hub Shelf adapter.
+ *
+ * HTML apps call only window.Shelf. When the page is served by the laptop hub
+ * over http(s), this adapter owns Money/Digest data via same-origin /api/*.
+ * Native Android Shelf is only the WebView doorway — hub relay wins for data.
+ * file:// stays on the offline mock (no hub).
+ */
+(function (root) {
+  "use strict";
+
+  if (root.location?.protocol === "file:") return;
+  if (!/^https?:$/.test(root.location?.protocol || "")) return;
+
+  function shelfError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    error.shelf = true;
+    return error;
+  }
+
+  async function request(path, options = {}) {
+    let response;
+    const ctrl =
+      !options.signal && typeof AbortController !== "undefined"
+        ? new AbortController()
+        : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
+    try {
+      response = await fetch(path, ctrl ? { ...options, signal: ctrl.signal } : options);
+    } catch (_error) {
+      throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable or too slow");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      throw shelfError(
+        "HUB_ERROR",
+        response.ok
+          ? "The laptop hub returned a non-JSON response"
+          : `The laptop hub rejected the request (HTTP ${response.status})`
+      );
+    }
+    if (!response.ok) {
+      throw shelfError("HUB_ERROR", payload.error || "The laptop hub rejected the request");
+    }
+    return payload;
+  }
+
+  function installHubRelay() {
+    const prior = root.Shelf;
+    const keepNative =
+      prior && prior.__real && !prior.__mock && !prior.__hub ? prior : null;
+
+    root.Shelf = {
+      __real: true,
+      __hub: true,
+      __doorway: Boolean(keepNative),
+      __version: 1,
+      data: {
+        async get(kind) {
+          if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
+            throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
+          }
+          const path =
+            kind === "accounts"
+              ? "/api/accounts"
+              : kind === "bills"
+                ? "/api/bills"
+                : kind === "rewards"
+                  ? "/api/rewards"
+                  : `/api/${encodeURIComponent(kind)}`;
+          const payload = await request(path);
+          if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
+            payload.transactions = payload.rows;
+          }
+          return payload;
+        }
+      },
+      accounts: {
+        list() {
+          return request("/api/accounts").then((payload) => payload.accounts || []);
+        },
+        create(account) {
+          return request("/api/accounts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(account)
+          });
+        },
+        update(id, patch) {
+          return request(`/api/accounts/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch)
+          });
+        }
+      },
+      bills: {
+        list() {
+          return request("/api/bills");
+        },
+        create(bill) {
+          return request("/api/bills", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(bill)
+          });
+        },
+        update(id, patch) {
+          return request(`/api/bills/${encodeURIComponent(id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch)
+          });
+        },
+        remove(id) {
+          return request(`/api/bills/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          });
+        }
+      },
+      import: {
+        text(payload) {
+          return request("/api/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        },
+        list() {
+          return request("/api/imports");
+        },
+        undo(id) {
+          return request(`/api/imports/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          });
+        }
+      },
+      rewards: {
+        get() {
+          return request("/api/rewards");
+        },
+        optimize() {
+          return request("/api/rewards/optimize");
+        },
+        refresh(forceMock) {
+          return request("/api/rewards/refresh", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ forceMock: Boolean(forceMock) })
+          });
+        },
+        saveOffer(offer) {
+          return request("/api/rewards/offers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(offer)
+          });
+        },
+        saveRule(rule) {
+          return request("/api/rewards/rules", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(rule)
+          });
+        }
+      },
+      secure: {
+        get() {
+          return Promise.reject(
+            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
+          );
+        },
+        set() {
+          return Promise.reject(
+            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
+          );
+        },
+        delete() {
+          return Promise.reject(
+            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
+          );
+        }
+      },
+      Net: {
+        call() {
+          return Promise.reject(
+            shelfError("NET_NATIVE_ONLY", "Net.call is not available in the hub HTML relay")
+          );
+        }
+      },
+      ai: {
+        mode() {
+          return request("/api/ai/mode");
+        },
+        setMode(mode) {
+          return request("/api/ai/mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode })
+          });
+        },
+        propose() {
+          return request("/api/ai/propose", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}"
+          });
+        },
+        proposals() {
+          return request("/api/ai/proposals");
+        }
+      },
+      outbox: {
+        push(items) {
+          const list = Array.isArray(items) ? items : [items];
+          return request("/api/outbox", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: list })
+          });
+        }
+      }
+    };
+
+    if (keepNative) {
+      for (const key of [
+        "contacts",
+        "sms",
+        "camera",
+        "ocr",
+        "fs",
+        "notify",
+        "onShare",
+        "onAppUrl"
+      ]) {
+        if (keepNative[key] != null) root.Shelf[key] = keepNative[key];
+      }
+    }
+
+    try {
+      root.dispatchEvent(new Event("shelf-hub-ready"));
+    } catch (_error) {
+      // ignore
+    }
+  }
+
+  // Prefer hub immediately on http(s). If a mock already claimed Shelf, probe
+  // health then upgrade. Native __real no longer blocks hub data relay.
+  if (root.Shelf?.__mock || root.Shelf?.__standalone) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 1200) : null;
+    fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined)
+      .then((response) => {
+        if (timer) clearTimeout(timer);
+        if (response.ok) installHubRelay();
+      })
+      .catch(() => {
+        if (timer) clearTimeout(timer);
+        // Stay offline — no hub required.
+      });
+    return;
+  }
+
+  installHubRelay();
+})(typeof globalThis !== "undefined" ? globalThis : this);
+
+  </script>
+  <script>
+  "use strict";
+
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const money2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+
+  function escapeHtml(value) {
+    const el = document.createElement("span");
+    el.textContent = value == null ? "" : String(value);
+    return el.innerHTML;
+  }
+
+  function actionId(prefix) {
+    const suffix = globalThis.crypto?.randomUUID
+      ? globalThis.crypto.randomUUID()
+      : Date.now() + "-" + Math.random().toString(16).slice(2);
+    return prefix + ":" + suffix;
+  }
+
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(label + " timed out after " + ms / 1000 + "s")), ms);
+      })
+    ]);
+  }
+
+  async function waitForShelf(ms) {
+    const deadline = Date.now() + (ms || 10000);
+    while (Date.now() < deadline) {
+      if (window.Shelf && typeof Shelf.data?.get === "function") return Shelf;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    throw new Error("Shelf bridge did not load — hard-refresh or open via the hub URL");
+  }
+
+  const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
+
+  function renderMoney() {
+    const snap = state.snapshot;
+    if (!snap) {
+      document.querySelector("#safe-detail").textContent = "No snapshot yet — sync with the hub";
+      return;
+    }
+    const safe = snap.safeToSpend || {};
+    const el = document.querySelector("#safe-value");
+    el.textContent = money.format(safe.remaining || 0);
+    el.classList.toggle("neg", (safe.remaining || 0) < 0);
+    document.querySelector("#safe-label").textContent = safe.nextPayday
+      ? "Safe to spend until " + safe.nextPayday
+      : "Safe to spend";
+    document.querySelector("#safe-detail").textContent =
+      money.format(safe.income ?? safe.weeklyIncome ?? 0) + " in − " +
+      money.format(safe.committed || 0) + " committed − " +
+      money.format(safe.savingsTarget || 0) + " savings − " +
+      money.format(safe.spent || 0) + " spent";
+    document.querySelector("#m-nw").textContent = money.format(snap.netWorth || 0);
+    document.querySelector("#m-liq").textContent = money.format(snap.liquid || 0);
+    document.querySelector("#m-owed").textContent = money.format(snap.owed || 0);
+    document.querySelector("#m-run").textContent = (snap.runwayMonths || 0).toFixed(1) + " mo";
+
+    const upcoming = Object.fromEntries((state.billsUpcoming || []).map((r) => [r.billId, r]));
+    document.querySelector("#bills-list").innerHTML = state.bills.length
+      ? state.bills.map((b) => {
+          const u = upcoming[b.id];
+          const when = u?.remind ? u.label : ("day " + b.dueDay);
+          return '<div class="row"><span><strong>' + escapeHtml(b.title) +
+            (b.active ? "" : " · off") + '</strong><br><span class="muted">' +
+            escapeHtml(when) + '</span></span><strong>' +
+            (b.amount > 0 ? money2.format(b.amount) : "set $") +
+            '</strong></div>';
+        }).join("")
+      : '<div class="empty">No bills — add rent below</div>';
+
+    const needs = state.transactions.filter((t) => t.needsReview).length;
+    document.querySelector("#review-count").textContent = needs ? "(" + needs + " need review)" : "";
+    const rows = state.transactions.slice(0, 40);
+    document.querySelector("#tx-list").innerHTML = rows.length
+      ? rows.map((tx) => {
+          return '<div class="row"><span><strong>' + escapeHtml(tx.merchant || tx.rawMerchant) +
+            '</strong><br><span class="muted">' + escapeHtml(tx.date) + " · " +
+            escapeHtml(state.labels[tx.account] || tx.account) +
+            (tx.needsReview ? " · review" : "") +
+            '</span></span><span>' + money2.format(tx.amount || 0) +
+            '<br><select data-tx="' + escapeHtml(tx.id) + '" class="tx-dir">' +
+            '<option value="">Review…</option>' +
+            '<option value="in"' + (tx.direction === "in" ? " selected" : "") + '>Income</option>' +
+            '<option value="out"' + (tx.direction === "out" ? " selected" : "") + '>Expense</option>' +
+            '<option value="transfer"' + (tx.direction === "transfer" ? " selected" : "") + '>Transfer</option>' +
+            '</select></span></div>';
+        }).join("")
+      : '<div class="empty">No transactions synced</div>';
+  }
+
+  function actionButtons(actions) {
+    if (!actions || !actions.length) return "";
+    const labels = {
+      "bill.paid": "Paid",
+      "rsvp.yes": "Going",
+      "rsvp.no": "Not going",
+      "task.complete": "Done",
+      "calendar.add": "Calendar",
+      dismiss: "Dismiss",
+      ack: "Ack",
+      unsubscribe: "Run"
+    };
+    return actions.map((a) => {
+      return '<button type="button" class="tiny digest-action" data-type="' +
+        escapeHtml(a.type) + '" data-ref="' +
+        escapeHtml(JSON.stringify(a.targetRef || {})) + '">' +
+        escapeHtml(labels[a.type] || a.type) + "</button>";
+    }).join("");
+  }
+
+  function fillList(id, items, mapper, empty) {
+    const root = document.querySelector("#" + id);
+    if (!items.length) {
+      root.innerHTML = '<div class="empty">' + empty + "</div>";
+      return;
+    }
+    root.innerHTML = items.map(mapper).join("");
+  }
+
+  async function loadDigest() {
+    const digest = await Shelf.data.get("digest");
+    if (!digest) {
+      document.querySelector("#digest-status").textContent = "No digest yet";
+      fillList("today", [], null, "Nothing today");
+      fillList("watching", [], null, "Nothing watching");
+      fillList("reading", [], null, "No reading");
+      fillList("junk", [], null, "No junk");
+      return;
+    }
+    fillList("today", digest.today || [], (item) => {
+      const when = item.dueAt || item.start || "";
+      return '<div class="row" style="flex-direction:column;align-items:stretch">' +
+        "<div><strong>" + escapeHtml(item.kind) +
+        (item.domain ? " · " + escapeHtml(item.domain) : "") +
+        " · " + escapeHtml(item.title || item.name) +
+        '</strong><div class="muted">' + escapeHtml(when) + "</div></div>" +
+        actionButtons(item.actions) + "</div>";
+    }, "Nothing today");
+    fillList("watching", digest.watching || [], (item) =>
+      '<div class="row"><span>not going · ' + escapeHtml(item.title || item.name) +
+      "</span></div>", "Nothing watching");
+    fillList("reading", digest.reading || [], (item) =>
+      '<div class="row"><a href="' + escapeHtml(item.url) + '" rel="noreferrer">' +
+      escapeHtml(item.title || item.url) + "</a></div>", "No reading");
+    fillList("junk", digest.junk || [], (item) =>
+      '<div class="row"><span>' + escapeHtml(item.action) + " · " +
+      escapeHtml(item.status || "pending") + "</span>" +
+      (item.status === "pending"
+        ? actionButtons([{ type: "unsubscribe", targetRef: item.targetRef || { itemId: item.id } }])
+        : "") + "</div>", "No junk");
+    document.querySelector("#digest-status").textContent =
+      "Updated " + (digest.generatedAt || "now") +
+      " · " + (digest.today || []).length + " today · " +
+      (digest.watching || []).length + " watching";
+  }
+
+  async function refreshMoney() {
+    const [txPayload, snap, billsPayload] = await Promise.all([
+      Shelf.data.get("transactions"),
+      Shelf.data.get("snapshot"),
+      (Shelf.bills?.list ? Shelf.bills.list() : Shelf.data.get("bills")).catch(() => null)
+    ]);
+    const rows = txPayload?.transactions ?? txPayload?.rows ?? [];
+    state.transactions = rows.map((r) => ({ ...r }));
+    state.snapshot = snap;
+    state.bills = billsPayload?.bills || [];
+    state.billsUpcoming = billsPayload?.upcoming || [];
+    const accounts = txPayload?.accounts || [];
+    state.labels = Object.fromEntries(accounts.map((a) => [a.id, a.label || a.id]));
+    if (!Object.keys(state.labels).length && snap?.balances) {
+      Object.keys(snap.balances).forEach((id) => { state.labels[id] = id; });
+    }
+    renderMoney();
+    document.querySelector("#money-status").textContent =
+      rows.length + " transactions · as of " + (txPayload?.asOfDate || "—");
+  }
+
+  document.querySelector("#bill-add").addEventListener("click", async () => {
+    const title = document.querySelector("#bill-title").value.trim();
+    if (!title) return;
+    const amount = Number(document.querySelector("#bill-amount").value) || 0;
+    const dueDay = Number(document.querySelector("#bill-due").value) || 1;
+    const leadDays = Number(document.querySelector("#bill-lead").value) || 5;
+    const id = "bill:" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    try {
+      if (Shelf.bills?.create) {
+        await Shelf.bills.create({ id, title, amount, dueDay, leadDays, active: true });
+      } else {
+        await Shelf.outbox.push({
+          id: actionId("bill"),
+          type: "action.bills.upsert",
+          source: "shelf-app",
+          collectedAt: new Date().toISOString(),
+          data: { id, title, amount, dueDay, leadDays, active: true }
+        });
+      }
+      document.querySelector("#bill-title").value = "";
+      document.querySelector("#bill-amount").value = "";
+      await refreshMoney();
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#tx-list").addEventListener("change", async (event) => {
+    const sel = event.target.closest(".tx-dir");
+    if (!sel) return;
+    const id = sel.dataset.tx;
+    const direction = sel.value;
+    const tx = state.transactions.find((t) => t.id === id);
+    if (!tx || !direction) return;
+    try {
+      await Shelf.outbox.push({
+        id: actionId("tx"),
+        type: "action.transaction.update",
+        source: "shelf-app",
+        collectedAt: new Date().toISOString(),
+        data: {
+          id,
+          direction,
+          category: direction === "out" ? (tx.category || "uncategorized") : "",
+          transferAccount: tx.transferAccount || ""
+        }
+      });
+      await refreshMoney();
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#digest-refresh").addEventListener("click", () => {
+    loadDigest().catch((e) => {
+      document.querySelector("#digest-status").textContent = e.message;
+    });
+  });
+
+  document.querySelector("#ai-propose").addEventListener("click", async () => {
+    const status = document.querySelector("#digest-status");
+    if (!Shelf.ai?.propose) {
+      status.textContent = "AI not available on this bridge";
+      return;
+    }
+    try {
+      await Shelf.ai.setMode("LOCAL");
+      const result = await Shelf.ai.propose();
+      status.textContent = "AI " + result.mode + ": " +
+        ((result.proposal?.flags || []).length) + " nudge(s)";
+      await loadDigest();
+    } catch (e) {
+      status.textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#tab-digest").addEventListener("click", async (event) => {
+    const button = event.target.closest(".digest-action");
+    if (!button) return;
+    let targetRef = {};
+    try { targetRef = JSON.parse(button.dataset.ref || "{}"); } catch (_e) {}
+    button.disabled = true;
+    try {
+      const type = button.dataset.type;
+      await Shelf.outbox.push({
+        id: actionId("digest:" + type),
+        type: type.startsWith("action.") ? type : "action." + type,
+        source: "shelf-app",
+        collectedAt: new Date().toISOString(),
+        data: { targetRef }
+      });
+      await loadDigest();
+    } catch (e) {
+      document.querySelector("#digest-status").textContent = e.message || String(e);
+      button.disabled = false;
+    }
+  });
+
+  function setBridgeLabel() {
+    document.querySelector("#bridge").textContent = Shelf.__hub
+      ? (Shelf.__doorway
+        ? "Hub live · Shelf doorway"
+        : "Laptop hub · live data")
+      : Shelf.__real
+        ? "Shelf gateway · open hub URL for live data"
+        : Shelf.__standalone || Shelf.__mock
+          ? "Browser preview only · open hub URL in Shelf"
+          : "Shelf";
+    const setup = document.querySelector("#setup-link");
+    if (setup) setup.hidden = !(Shelf.__hub || location.protocol === "http:" || location.protocol === "https:");
+  }
+
+  async function updateSyncStatus() {
+    const status = document.querySelector("#sync-status");
+    try {
+      const [snap, digest, tx] = await Promise.all([
+        Shelf.data.get("snapshot").catch(() => null),
+        Shelf.data.get("digest").catch(() => null),
+        Shelf.data.get("transactions").catch(() => null)
+      ]);
+      const n = (tx?.transactions || tx?.rows || []).length;
+      if (snap || digest || n) {
+        status.textContent =
+          "Live from hub · " + n + " tx · snapshot " + (snap ? "yes" : "no") +
+          " · digest " + (digest ? "yes" : "no");
+      } else {
+        status.textContent = "Connected bridge, but no hub data yet — check Setup / SimpleFIN.";
+      }
+    } catch (e) {
+      status.textContent = e.message || String(e);
+    }
+  }
+
+  async function probeLiveHub() {
+    if (Shelf && Shelf.__hub) return true;
+    if (location.protocol === "file:") return false;
+    try {
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 900) : null;
+      const res = await fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (!res.ok) return false;
+      const body = await res.json().catch(() => null);
+      return Boolean(body && body.ok);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async function loadDoorway() {
+    const hubBlock = document.querySelector("#sync-hub-block");
+    const offlineBlock = document.querySelector("#sync-offline-block");
+    const live = await probeLiveHub();
+    if (!live) {
+      hubBlock.hidden = true;
+      offlineBlock.hidden = false;
+      const input = document.querySelector("#hub-url-input");
+      try {
+        const saved = localStorage.getItem("life.hubAppUrl");
+        if (saved && input && !input.value) input.value = saved;
+      } catch (_e) {}
+      document.querySelector("#sync-status").textContent =
+        "Preview only until you open the laptop hub URL in Shelf.";
+      return;
+    }
+    hubBlock.hidden = false;
+    offlineBlock.hidden = true;
+    try {
+      const res = await fetch("/api/sync/phone");
+      const card = await res.json();
+      if (!res.ok) throw new Error(card.error || "Doorway info failed");
+      const urlEl = document.querySelector("#phone-url");
+      const qr = document.querySelector("#phone-qr");
+      const hint = document.querySelector("#sync-hint");
+      const meta = document.querySelector("#sync-meta");
+      if (!card.lanBound) {
+        urlEl.textContent = card.localUrl + " (laptop only)";
+        qr.innerHTML = '<p class="muted" style="color:#333;padding:12px;text-align:center">LAN off — set HUB_HOST=0.0.0.0 and restart the hub</p>';
+      } else if (card.preferredUrl) {
+        urlEl.textContent = card.preferredUrl;
+        qr.innerHTML = card.svg || "";
+        try { localStorage.setItem("life.hubAppUrl", card.preferredUrl); } catch (_e) {}
+      } else {
+        urlEl.textContent = "No LAN IPv4 address found";
+        qr.textContent = "";
+      }
+      hint.textContent = card.hint || "";
+      meta.textContent =
+        "Fingerprint " + (card.fingerprint || "—") +
+        (card.urls && card.urls.length > 1 ? " · also " + card.urls.slice(1).join(", ") : "");
+      await updateSyncStatus();
+    } catch (e) {
+      document.querySelector("#phone-url").textContent = "Could not load doorway info";
+      document.querySelector("#phone-qr").textContent = "";
+      document.querySelector("#sync-status").textContent = e.message || String(e);
+    }
+  }
+
+  function normalizeHubAppUrl(raw) {
+    let url = String(raw || "").trim();
+    if (!url) return "";
+    if (!/^https?:///i.test(url)) url = "http://" + url;
+    if (!//apps/app.html/i.test(url)) {
+      url = url.replace(//+$/, "") + "/apps/app.html";
+    }
+    return url;
+  }
+
+  document.querySelector("#hub-url-test")?.addEventListener("click", async () => {
+    const status = document.querySelector("#sync-status");
+    const url = normalizeHubAppUrl(document.querySelector("#hub-url-input")?.value);
+    if (!url) {
+      status.textContent = "Paste the hub URL first.";
+      return;
+    }
+    status.textContent = "Testing " + url + " …";
+    try {
+      const base = new URL(url);
+      const healthUrl = base.origin + "/api/health";
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
+      const res = await fetch(healthUrl, ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        status.textContent = "Reached something, but not the finance hub (HTTP " + res.status + ").";
+        return;
+      }
+      status.textContent =
+        "Reachable · LAN " + (body.lanBound ? "on" : "off") +
+        (body.phoneUrl ? " · " + body.phoneUrl : "") +
+        " — tap Open hub in Shelf.";
+      try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
+    } catch (e) {
+      status.textContent =
+        "Cannot reach hub from this phone (" + (e.name || "error") + "). Same Wi‑Fi? Firewall? Device-to-device on?";
+    }
+  });
+
+  document.querySelector("#hub-url-open")?.addEventListener("click", () => {
+    const input = document.querySelector("#hub-url-input");
+    const url = normalizeHubAppUrl(input?.value);
+    if (!url) {
+      document.querySelector("#sync-status").textContent = "Paste the hub URL from the laptop Sync tab.";
+      return;
+    }
+    try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
+    document.querySelector("#sync-status").textContent = "Opening " + url + " …";
+    location.href = url;
+  });
+
+  document.querySelector("#sync-refresh")?.addEventListener("click", async () => {
+    try {
+      await refreshMoney();
+      await loadDigest();
+      await updateSyncStatus();
+      document.querySelector("#sync-status").textContent += " · refreshed";
+    } catch (e) {
+      document.querySelector("#sync-status").textContent = e.message || String(e);
+    }
+  });
+
+  document.querySelector("#sync-reload-doorway")?.addEventListener("click", () => {
+    loadDoorway().catch(() => {});
+  });
+
+  async function boot() {
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Connecting to hub…";
+    await waitForShelf(12000);
+    setBridgeLabel();
+    try {
+      await withTimeout(refreshMoney(), 15000, "Money load");
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+      document.querySelector("#safe-detail").textContent = "Hub data load failed — check hub is running";
+    }
+    try {
+      await withTimeout(loadDigest(), 15000, "Digest load");
+    } catch (e) {
+      document.querySelector("#digest-status").textContent = e.message || String(e);
+    }
+    if (document.querySelector("#tab-sync")?.classList.contains("on")) {
+      await loadDoorway().catch(() => {});
+    }
+  }
+
+  window.__lifeLoadDoorway = () => loadDoorway().catch(() => {});
+
+  window.addEventListener("shelf-hub-ready", () => {
+    setBridgeLabel();
+    refreshMoney().catch(() => {});
+    loadDigest().catch(() => {});
+    loadDoorway().catch(() => {});
+  });
+
+  boot().catch((error) => {
+    const box = document.querySelector("#boot-error");
+    box.hidden = false;
+    box.textContent = "Failed: " + (error.message || error);
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Failed to start";
+  });
+
+  window.__lifeBoot = boot;
+  </script>
+  <script>
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -1273,272 +2056,6 @@
   </script>
   <script>
 /**
- * Browser-to-hub Shelf adapter.
- *
- * HTML apps call only window.Shelf. When the page is served by the laptop hub
- * over http(s), this adapter owns Money/Digest data via same-origin /api/*.
- * Native Android Shelf is only the WebView doorway — hub relay wins for data.
- * file:// stays on the offline mock (no hub).
- */
-(function (root) {
-  "use strict";
-
-  if (root.location?.protocol === "file:") return;
-  if (!/^https?:$/.test(root.location?.protocol || "")) return;
-
-  function shelfError(code, message) {
-    const error = new Error(message);
-    error.code = code;
-    error.shelf = true;
-    return error;
-  }
-
-  async function request(path, options) {
-    let response;
-    try {
-      response = await fetch(path, options);
-    } catch (_error) {
-      throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable");
-    }
-    let payload = null;
-    try {
-      payload = await response.json();
-    } catch (_error) {
-      throw shelfError(
-        "HUB_ERROR",
-        response.ok
-          ? "The laptop hub returned a non-JSON response"
-          : `The laptop hub rejected the request (HTTP ${response.status})`
-      );
-    }
-    if (!response.ok) {
-      throw shelfError("HUB_ERROR", payload.error || "The laptop hub rejected the request");
-    }
-    return payload;
-  }
-
-  function installHubRelay() {
-    const prior = root.Shelf;
-    const keepNative =
-      prior && prior.__real && !prior.__mock && !prior.__hub ? prior : null;
-
-    root.Shelf = {
-      __real: true,
-      __hub: true,
-      __doorway: Boolean(keepNative),
-      __version: 1,
-      data: {
-        async get(kind) {
-          if (!["transactions", "snapshot", "digest", "accounts", "bills", "rewards"].includes(kind)) {
-            throw shelfError("UNKNOWN_KIND", `Unknown data kind: ${kind}`);
-          }
-          const path =
-            kind === "accounts"
-              ? "/api/accounts"
-              : kind === "bills"
-                ? "/api/bills"
-                : kind === "rewards"
-                  ? "/api/rewards"
-                  : `/api/${encodeURIComponent(kind)}`;
-          const payload = await request(path);
-          if (kind === "transactions" && payload && payload.rows && !payload.transactions) {
-            payload.transactions = payload.rows;
-          }
-          return payload;
-        }
-      },
-      accounts: {
-        list() {
-          return request("/api/accounts").then((payload) => payload.accounts || []);
-        },
-        create(account) {
-          return request("/api/accounts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(account)
-          });
-        },
-        update(id, patch) {
-          return request(`/api/accounts/${encodeURIComponent(id)}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(patch)
-          });
-        }
-      },
-      bills: {
-        list() {
-          return request("/api/bills");
-        },
-        create(bill) {
-          return request("/api/bills", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(bill)
-          });
-        },
-        update(id, patch) {
-          return request(`/api/bills/${encodeURIComponent(id)}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(patch)
-          });
-        },
-        remove(id) {
-          return request(`/api/bills/${encodeURIComponent(id)}`, {
-            method: "DELETE"
-          });
-        }
-      },
-      import: {
-        text(payload) {
-          return request("/api/import", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-        },
-        list() {
-          return request("/api/imports");
-        },
-        undo(id) {
-          return request(`/api/imports/${encodeURIComponent(id)}`, {
-            method: "DELETE"
-          });
-        }
-      },
-      rewards: {
-        get() {
-          return request("/api/rewards");
-        },
-        optimize() {
-          return request("/api/rewards/optimize");
-        },
-        refresh(forceMock) {
-          return request("/api/rewards/refresh", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ forceMock: Boolean(forceMock) })
-          });
-        },
-        saveOffer(offer) {
-          return request("/api/rewards/offers", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(offer)
-          });
-        },
-        saveRule(rule) {
-          return request("/api/rewards/rules", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(rule)
-          });
-        }
-      },
-      secure: {
-        get() {
-          return Promise.reject(
-            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
-          );
-        },
-        set() {
-          return Promise.reject(
-            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
-          );
-        },
-        delete() {
-          return Promise.reject(
-            shelfError("SECURE_DISABLED", "Shelf.secure is disabled; configure tokens in Connect and use Net.call")
-          );
-        }
-      },
-      Net: {
-        call() {
-          return Promise.reject(
-            shelfError("NET_NATIVE_ONLY", "Net.call is not available in the hub HTML relay")
-          );
-        }
-      },
-      ai: {
-        mode() {
-          return request("/api/ai/mode");
-        },
-        setMode(mode) {
-          return request("/api/ai/mode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode })
-          });
-        },
-        propose() {
-          return request("/api/ai/propose", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: "{}"
-          });
-        },
-        proposals() {
-          return request("/api/ai/proposals");
-        }
-      },
-      outbox: {
-        push(items) {
-          const list = Array.isArray(items) ? items : [items];
-          return request("/api/outbox", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: list })
-          });
-        }
-      }
-    };
-
-    if (keepNative) {
-      for (const key of [
-        "contacts",
-        "sms",
-        "camera",
-        "ocr",
-        "fs",
-        "notify",
-        "onShare",
-        "onAppUrl"
-      ]) {
-        if (keepNative[key] != null) root.Shelf[key] = keepNative[key];
-      }
-    }
-
-    try {
-      root.dispatchEvent(new Event("shelf-hub-ready"));
-    } catch (_error) {
-      // ignore
-    }
-  }
-
-  // Prefer hub immediately on http(s). If a mock already claimed Shelf, probe
-  // health then upgrade. Native __real no longer blocks hub data relay.
-  if (root.Shelf?.__mock || root.Shelf?.__standalone) {
-    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timer = ctrl ? setTimeout(() => ctrl.abort(), 1200) : null;
-    fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined)
-      .then((response) => {
-        if (timer) clearTimeout(timer);
-        if (response.ok) installHubRelay();
-      })
-      .catch(() => {
-        if (timer) clearTimeout(timer);
-        // Stay offline — no hub required.
-      });
-    return;
-  }
-
-  installHubRelay();
-})(typeof globalThis !== "undefined" ? globalThis : this);
-
-  </script>
-  <script>
-/**
  * mock-shelf.js — offline Shelf (no hub required)
  *
  * Installs when a real native Shelf bridge is absent. Persists to localStorage
@@ -2195,469 +2712,16 @@
 
   </script>
   <script>
-  "use strict";
-
-  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-  const money2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
-
-  function escapeHtml(value) {
-    const el = document.createElement("span");
-    el.textContent = value == null ? "" : String(value);
-    return el.innerHTML;
-  }
-
-  function actionId(prefix) {
-    const suffix = globalThis.crypto?.randomUUID
-      ? globalThis.crypto.randomUUID()
-      : Date.now() + "-" + Math.random().toString(16).slice(2);
-    return prefix + ":" + suffix;
-  }
-
-  const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
-
-  document.querySelectorAll(".tabs button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
-      document.querySelector("#tab-" + btn.dataset.tab).classList.add("on");
-      if (btn.dataset.tab === "sync") loadDoorway().catch(() => {});
-    });
-  });
-
-  function renderMoney() {
-    const snap = state.snapshot;
-    if (!snap) {
-      document.querySelector("#safe-detail").textContent = "No snapshot yet — sync with the hub";
-      return;
+  (function () {
+    "use strict";
+    if (window.Shelf && Shelf.__hub) return;
+    if (!(window.Shelf && typeof Shelf.data?.get === "function")) return;
+    const bridge = document.querySelector("#bridge");
+    const stuck = bridge && /Connecting|Loading|Starting|Failed/i.test(bridge.textContent || "");
+    if (stuck && typeof window.__lifeBoot === "function") {
+      window.__lifeBoot().catch(() => {});
     }
-    const safe = snap.safeToSpend || {};
-    const el = document.querySelector("#safe-value");
-    el.textContent = money.format(safe.remaining || 0);
-    el.classList.toggle("neg", (safe.remaining || 0) < 0);
-    document.querySelector("#safe-label").textContent = safe.nextPayday
-      ? "Safe to spend until " + safe.nextPayday
-      : "Safe to spend";
-    document.querySelector("#safe-detail").textContent =
-      money.format(safe.income ?? safe.weeklyIncome ?? 0) + " in − " +
-      money.format(safe.committed || 0) + " committed − " +
-      money.format(safe.savingsTarget || 0) + " savings − " +
-      money.format(safe.spent || 0) + " spent";
-    document.querySelector("#m-nw").textContent = money.format(snap.netWorth || 0);
-    document.querySelector("#m-liq").textContent = money.format(snap.liquid || 0);
-    document.querySelector("#m-owed").textContent = money.format(snap.owed || 0);
-    document.querySelector("#m-run").textContent = (snap.runwayMonths || 0).toFixed(1) + " mo";
-
-    const upcoming = Object.fromEntries((state.billsUpcoming || []).map((r) => [r.billId, r]));
-    document.querySelector("#bills-list").innerHTML = state.bills.length
-      ? state.bills.map((b) => {
-          const u = upcoming[b.id];
-          const when = u?.remind ? u.label : ("day " + b.dueDay);
-          return '<div class="row"><span><strong>' + escapeHtml(b.title) +
-            (b.active ? "" : " · off") + '</strong><br><span class="muted">' +
-            escapeHtml(when) + '</span></span><strong>' +
-            (b.amount > 0 ? money2.format(b.amount) : "set $") +
-            '</strong></div>';
-        }).join("")
-      : '<div class="empty">No bills — add rent below</div>';
-
-    const needs = state.transactions.filter((t) => t.needsReview).length;
-    document.querySelector("#review-count").textContent = needs ? "(" + needs + " need review)" : "";
-    const rows = state.transactions.slice(0, 40);
-    document.querySelector("#tx-list").innerHTML = rows.length
-      ? rows.map((tx) => {
-          return '<div class="row"><span><strong>' + escapeHtml(tx.merchant || tx.rawMerchant) +
-            '</strong><br><span class="muted">' + escapeHtml(tx.date) + " · " +
-            escapeHtml(state.labels[tx.account] || tx.account) +
-            (tx.needsReview ? " · review" : "") +
-            '</span></span><span>' + money2.format(tx.amount || 0) +
-            '<br><select data-tx="' + escapeHtml(tx.id) + '" class="tx-dir">' +
-            '<option value="">Review…</option>' +
-            '<option value="in"' + (tx.direction === "in" ? " selected" : "") + '>Income</option>' +
-            '<option value="out"' + (tx.direction === "out" ? " selected" : "") + '>Expense</option>' +
-            '<option value="transfer"' + (tx.direction === "transfer" ? " selected" : "") + '>Transfer</option>' +
-            '</select></span></div>';
-        }).join("")
-      : '<div class="empty">No transactions synced</div>';
-  }
-
-  function actionButtons(actions) {
-    if (!actions || !actions.length) return "";
-    const labels = {
-      "bill.paid": "Paid",
-      "rsvp.yes": "Going",
-      "rsvp.no": "Not going",
-      "task.complete": "Done",
-      "calendar.add": "Calendar",
-      dismiss: "Dismiss",
-      ack: "Ack",
-      unsubscribe: "Run"
-    };
-    return actions.map((a) => {
-      return '<button type="button" class="tiny digest-action" data-type="' +
-        escapeHtml(a.type) + '" data-ref="' +
-        escapeHtml(JSON.stringify(a.targetRef || {})) + '">' +
-        escapeHtml(labels[a.type] || a.type) + "</button>";
-    }).join("");
-  }
-
-  function fillList(id, items, mapper, empty) {
-    const root = document.querySelector("#" + id);
-    if (!items.length) {
-      root.innerHTML = '<div class="empty">' + empty + "</div>";
-      return;
-    }
-    root.innerHTML = items.map(mapper).join("");
-  }
-
-  async function loadDigest() {
-    const digest = await Shelf.data.get("digest");
-    if (!digest) {
-      document.querySelector("#digest-status").textContent = "No digest yet";
-      fillList("today", [], null, "Nothing today");
-      fillList("watching", [], null, "Nothing watching");
-      fillList("reading", [], null, "No reading");
-      fillList("junk", [], null, "No junk");
-      return;
-    }
-    fillList("today", digest.today || [], (item) => {
-      const when = item.dueAt || item.start || "";
-      return '<div class="row" style="flex-direction:column;align-items:stretch">' +
-        "<div><strong>" + escapeHtml(item.kind) +
-        (item.domain ? " · " + escapeHtml(item.domain) : "") +
-        " · " + escapeHtml(item.title || item.name) +
-        '</strong><div class="muted">' + escapeHtml(when) + "</div></div>" +
-        actionButtons(item.actions) + "</div>";
-    }, "Nothing today");
-    fillList("watching", digest.watching || [], (item) =>
-      '<div class="row"><span>not going · ' + escapeHtml(item.title || item.name) +
-      "</span></div>", "Nothing watching");
-    fillList("reading", digest.reading || [], (item) =>
-      '<div class="row"><a href="' + escapeHtml(item.url) + '" rel="noreferrer">' +
-      escapeHtml(item.title || item.url) + "</a></div>", "No reading");
-    fillList("junk", digest.junk || [], (item) =>
-      '<div class="row"><span>' + escapeHtml(item.action) + " · " +
-      escapeHtml(item.status || "pending") + "</span>" +
-      (item.status === "pending"
-        ? actionButtons([{ type: "unsubscribe", targetRef: item.targetRef || { itemId: item.id } }])
-        : "") + "</div>", "No junk");
-    document.querySelector("#digest-status").textContent =
-      "Updated " + (digest.generatedAt || "now") +
-      " · " + (digest.today || []).length + " today · " +
-      (digest.watching || []).length + " watching";
-  }
-
-  async function refreshMoney() {
-    const [txPayload, snap, billsPayload] = await Promise.all([
-      Shelf.data.get("transactions"),
-      Shelf.data.get("snapshot"),
-      (Shelf.bills?.list ? Shelf.bills.list() : Shelf.data.get("bills")).catch(() => null)
-    ]);
-    const rows = txPayload?.transactions ?? txPayload?.rows ?? [];
-    state.transactions = rows.map((r) => ({ ...r }));
-    state.snapshot = snap;
-    state.bills = billsPayload?.bills || [];
-    state.billsUpcoming = billsPayload?.upcoming || [];
-    const accounts = txPayload?.accounts || [];
-    state.labels = Object.fromEntries(accounts.map((a) => [a.id, a.label || a.id]));
-    if (!Object.keys(state.labels).length && snap?.balances) {
-      Object.keys(snap.balances).forEach((id) => { state.labels[id] = id; });
-    }
-    renderMoney();
-    document.querySelector("#money-status").textContent =
-      rows.length + " transactions · as of " + (txPayload?.asOfDate || "—");
-  }
-
-  document.querySelector("#bill-add").addEventListener("click", async () => {
-    const title = document.querySelector("#bill-title").value.trim();
-    if (!title) return;
-    const amount = Number(document.querySelector("#bill-amount").value) || 0;
-    const dueDay = Number(document.querySelector("#bill-due").value) || 1;
-    const leadDays = Number(document.querySelector("#bill-lead").value) || 5;
-    const id = "bill:" + title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    try {
-      if (Shelf.bills?.create) {
-        await Shelf.bills.create({ id, title, amount, dueDay, leadDays, active: true });
-      } else {
-        await Shelf.outbox.push({
-          id: actionId("bill"),
-          type: "action.bills.upsert",
-          source: "shelf-app",
-          collectedAt: new Date().toISOString(),
-          data: { id, title, amount, dueDay, leadDays, active: true }
-        });
-      }
-      document.querySelector("#bill-title").value = "";
-      document.querySelector("#bill-amount").value = "";
-      await refreshMoney();
-    } catch (e) {
-      document.querySelector("#money-status").textContent = e.message || String(e);
-    }
-  });
-
-  document.querySelector("#tx-list").addEventListener("change", async (event) => {
-    const sel = event.target.closest(".tx-dir");
-    if (!sel) return;
-    const id = sel.dataset.tx;
-    const direction = sel.value;
-    const tx = state.transactions.find((t) => t.id === id);
-    if (!tx || !direction) return;
-    try {
-      await Shelf.outbox.push({
-        id: actionId("tx"),
-        type: "action.transaction.update",
-        source: "shelf-app",
-        collectedAt: new Date().toISOString(),
-        data: {
-          id,
-          direction,
-          category: direction === "out" ? (tx.category || "uncategorized") : "",
-          transferAccount: tx.transferAccount || ""
-        }
-      });
-      await refreshMoney();
-    } catch (e) {
-      document.querySelector("#money-status").textContent = e.message || String(e);
-    }
-  });
-
-  document.querySelector("#digest-refresh").addEventListener("click", () => {
-    loadDigest().catch((e) => {
-      document.querySelector("#digest-status").textContent = e.message;
-    });
-  });
-
-  document.querySelector("#ai-propose").addEventListener("click", async () => {
-    const status = document.querySelector("#digest-status");
-    if (!Shelf.ai?.propose) {
-      status.textContent = "AI not available on this bridge";
-      return;
-    }
-    try {
-      await Shelf.ai.setMode("LOCAL");
-      const result = await Shelf.ai.propose();
-      status.textContent = "AI " + result.mode + ": " +
-        ((result.proposal?.flags || []).length) + " nudge(s)";
-      await loadDigest();
-    } catch (e) {
-      status.textContent = e.message || String(e);
-    }
-  });
-
-  document.querySelector("#tab-digest").addEventListener("click", async (event) => {
-    const button = event.target.closest(".digest-action");
-    if (!button) return;
-    let targetRef = {};
-    try { targetRef = JSON.parse(button.dataset.ref || "{}"); } catch (_e) {}
-    button.disabled = true;
-    try {
-      const type = button.dataset.type;
-      await Shelf.outbox.push({
-        id: actionId("digest:" + type),
-        type: type.startsWith("action.") ? type : "action." + type,
-        source: "shelf-app",
-        collectedAt: new Date().toISOString(),
-        data: { targetRef }
-      });
-      await loadDigest();
-    } catch (e) {
-      document.querySelector("#digest-status").textContent = e.message || String(e);
-      button.disabled = false;
-    }
-  });
-
-  function setBridgeLabel() {
-    document.querySelector("#bridge").textContent = Shelf.__hub
-      ? (Shelf.__doorway
-        ? "Hub live · Shelf doorway"
-        : "Laptop hub · live data")
-      : Shelf.__real
-        ? "Shelf gateway · open hub URL for live data"
-        : Shelf.__standalone || Shelf.__mock
-          ? "Browser preview only · open hub URL in Shelf"
-          : "Shelf";
-    const setup = document.querySelector("#setup-link");
-    if (setup) setup.hidden = !(Shelf.__hub || location.protocol === "http:" || location.protocol === "https:");
-  }
-
-  async function updateSyncStatus() {
-    const status = document.querySelector("#sync-status");
-    try {
-      const [snap, digest, tx] = await Promise.all([
-        Shelf.data.get("snapshot").catch(() => null),
-        Shelf.data.get("digest").catch(() => null),
-        Shelf.data.get("transactions").catch(() => null)
-      ]);
-      const n = (tx?.transactions || tx?.rows || []).length;
-      if (snap || digest || n) {
-        status.textContent =
-          "Live from hub · " + n + " tx · snapshot " + (snap ? "yes" : "no") +
-          " · digest " + (digest ? "yes" : "no");
-      } else {
-        status.textContent = "Connected bridge, but no hub data yet — check Setup / SimpleFIN.";
-      }
-    } catch (e) {
-      status.textContent = e.message || String(e);
-    }
-  }
-
-  async function probeLiveHub() {
-    if (Shelf && Shelf.__hub) return true;
-    if (location.protocol === "file:") return false;
-    try {
-      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), 900) : null;
-      const res = await fetch("/api/health", ctrl ? { signal: ctrl.signal } : undefined);
-      if (timer) clearTimeout(timer);
-      if (!res.ok) return false;
-      const body = await res.json().catch(() => null);
-      return Boolean(body && body.ok);
-    } catch (_error) {
-      return false;
-    }
-  }
-
-  async function loadDoorway() {
-    const hubBlock = document.querySelector("#sync-hub-block");
-    const offlineBlock = document.querySelector("#sync-offline-block");
-    const live = await probeLiveHub();
-    if (!live) {
-      hubBlock.hidden = true;
-      offlineBlock.hidden = false;
-      const input = document.querySelector("#hub-url-input");
-      try {
-        const saved = localStorage.getItem("life.hubAppUrl");
-        if (saved && input && !input.value) input.value = saved;
-      } catch (_e) {}
-      document.querySelector("#sync-status").textContent =
-        "Preview only until you open the laptop hub URL in Shelf.";
-      return;
-    }
-    hubBlock.hidden = false;
-    offlineBlock.hidden = true;
-    try {
-      const res = await fetch("/api/sync/phone");
-      const card = await res.json();
-      if (!res.ok) throw new Error(card.error || "Doorway info failed");
-      const urlEl = document.querySelector("#phone-url");
-      const qr = document.querySelector("#phone-qr");
-      const hint = document.querySelector("#sync-hint");
-      const meta = document.querySelector("#sync-meta");
-      if (!card.lanBound) {
-        urlEl.textContent = card.localUrl + " (laptop only)";
-        qr.innerHTML = '<p class="muted" style="color:#333;padding:12px;text-align:center">LAN off — set HUB_HOST=0.0.0.0 and restart the hub</p>';
-      } else if (card.preferredUrl) {
-        urlEl.textContent = card.preferredUrl;
-        qr.innerHTML = card.svg || "";
-        try { localStorage.setItem("life.hubAppUrl", card.preferredUrl); } catch (_e) {}
-      } else {
-        urlEl.textContent = "No LAN IPv4 address found";
-        qr.textContent = "";
-      }
-      hint.textContent = card.hint || "";
-      meta.textContent =
-        "Fingerprint " + (card.fingerprint || "—") +
-        (card.urls && card.urls.length > 1 ? " · also " + card.urls.slice(1).join(", ") : "");
-      await updateSyncStatus();
-    } catch (e) {
-      document.querySelector("#phone-url").textContent = "Could not load doorway info";
-      document.querySelector("#phone-qr").textContent = "";
-      document.querySelector("#sync-status").textContent = e.message || String(e);
-    }
-  }
-
-  function normalizeHubAppUrl(raw) {
-    let url = String(raw || "").trim();
-    if (!url) return "";
-    if (!/^https?:///i.test(url)) url = "http://" + url;
-    if (!//apps/app.html/i.test(url)) {
-      url = url.replace(//+$/, "") + "/apps/app.html";
-    }
-    return url;
-  }
-
-  document.querySelector("#hub-url-test")?.addEventListener("click", async () => {
-    const status = document.querySelector("#sync-status");
-    const url = normalizeHubAppUrl(document.querySelector("#hub-url-input")?.value);
-    if (!url) {
-      status.textContent = "Paste the hub URL first.";
-      return;
-    }
-    status.textContent = "Testing " + url + " …";
-    try {
-      const base = new URL(url);
-      const healthUrl = base.origin + "/api/health";
-      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
-      const res = await fetch(healthUrl, ctrl ? { signal: ctrl.signal } : undefined);
-      if (timer) clearTimeout(timer);
-      const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.ok) {
-        status.textContent = "Reached something, but not the finance hub (HTTP " + res.status + ").";
-        return;
-      }
-      status.textContent =
-        "Reachable · LAN " + (body.lanBound ? "on" : "off") +
-        (body.phoneUrl ? " · " + body.phoneUrl : "") +
-        " — tap Open hub in Shelf.";
-      try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
-    } catch (e) {
-      status.textContent =
-        "Cannot reach hub from this phone (" + (e.name || "error") + "). Same Wi‑Fi? Firewall? Device-to-device on?";
-    }
-  });
-
-  document.querySelector("#hub-url-open")?.addEventListener("click", () => {
-    const input = document.querySelector("#hub-url-input");
-    const url = normalizeHubAppUrl(input?.value);
-    if (!url) {
-      document.querySelector("#sync-status").textContent = "Paste the hub URL from the laptop Sync tab.";
-      return;
-    }
-    try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
-    document.querySelector("#sync-status").textContent = "Opening " + url + " …";
-    location.href = url;
-  });
-
-  document.querySelector("#sync-refresh")?.addEventListener("click", async () => {
-    try {
-      await refreshMoney();
-      await loadDigest();
-      await updateSyncStatus();
-      document.querySelector("#sync-status").textContent += " · refreshed";
-    } catch (e) {
-      document.querySelector("#sync-status").textContent = e.message || String(e);
-    }
-  });
-
-  document.querySelector("#sync-reload-doorway")?.addEventListener("click", () => {
-    loadDoorway().catch(() => {});
-  });
-
-  async function boot() {
-    if (!window.Shelf || typeof Shelf.data?.get !== "function") {
-      throw new Error("window.Shelf is missing");
-    }
-    setBridgeLabel();
-    await refreshMoney();
-    await loadDigest();
-    if (document.querySelector("#tab-sync")?.classList.contains("on")) {
-      await loadDoorway();
-    }
-  }
-
-  window.addEventListener("shelf-hub-ready", () => {
-    setBridgeLabel();
-    refreshMoney().catch(() => {});
-    loadDigest().catch(() => {});
-    loadDoorway().catch(() => {});
-  });
-
-  boot().catch((error) => {
-    const box = document.querySelector("#boot-error");
-    box.hidden = false;
-    box.textContent = "Failed: " + (error.message || error);
-  });
+  })();
   </script>
 </body>
 </html>

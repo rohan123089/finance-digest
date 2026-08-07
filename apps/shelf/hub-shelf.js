@@ -19,12 +19,19 @@
     return error;
   }
 
-  async function request(path, options) {
+  async function request(path, options = {}) {
     let response;
+    const ctrl =
+      !options.signal && typeof AbortController !== "undefined"
+        ? new AbortController()
+        : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
     try {
-      response = await fetch(path, options);
+      response = await fetch(path, ctrl ? { ...options, signal: ctrl.signal } : options);
     } catch (_error) {
-      throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable");
+      throw shelfError("HUB_UNAVAILABLE", "The laptop hub is unavailable or too slow");
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     let payload = null;
     try {

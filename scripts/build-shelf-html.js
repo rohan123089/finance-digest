@@ -253,19 +253,29 @@ const html = `<!doctype html>
   </div>
 
   <script>
-${rules}
-  </script>
-  <script>
-${model}
-  </script>
-  <script>
-${bills}
+  // Wire tabs immediately so the UI stays usable while larger scripts parse.
+  (function () {
+    "use strict";
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Loading…";
+    document.querySelectorAll(".tabs button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
+        const panel = document.querySelector("#tab-" + btn.dataset.tab);
+        if (panel) panel.classList.add("on");
+        try {
+          if (btn.dataset.tab === "sync" && typeof window.__lifeLoadDoorway === "function") {
+            window.__lifeLoadDoorway();
+          }
+        } catch (_e) {}
+      });
+    });
+  })();
   </script>
   <script>
 ${hubShelf}
-  </script>
-  <script>
-${mockShelf}
   </script>
   <script>
   "use strict";
@@ -286,17 +296,25 @@ ${mockShelf}
     return prefix + ":" + suffix;
   }
 
-  const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(label + " timed out after " + ms / 1000 + "s")), ms);
+      })
+    ]);
+  }
 
-  document.querySelectorAll(".tabs button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
-      document.querySelector("#tab-" + btn.dataset.tab).classList.add("on");
-      if (btn.dataset.tab === "sync") loadDoorway().catch(() => {});
-    });
-  });
+  async function waitForShelf(ms) {
+    const deadline = Date.now() + (ms || 10000);
+    while (Date.now() < deadline) {
+      if (window.Shelf && typeof Shelf.data?.get === "function") return Shelf;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    throw new Error("Shelf bridge did not load — hard-refresh or open via the hub URL");
+  }
+
+  const state = { transactions: [], snapshot: null, bills: [], billsUpcoming: [], labels: {} };
 
   function renderMoney() {
     const snap = state.snapshot;
@@ -708,16 +726,27 @@ ${mockShelf}
   });
 
   async function boot() {
-    if (!window.Shelf || typeof Shelf.data?.get !== "function") {
-      throw new Error("window.Shelf is missing");
-    }
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Connecting to hub…";
+    await waitForShelf(12000);
     setBridgeLabel();
-    await refreshMoney();
-    await loadDigest();
+    try {
+      await withTimeout(refreshMoney(), 15000, "Money load");
+    } catch (e) {
+      document.querySelector("#money-status").textContent = e.message || String(e);
+      document.querySelector("#safe-detail").textContent = "Hub data load failed — check hub is running";
+    }
+    try {
+      await withTimeout(loadDigest(), 15000, "Digest load");
+    } catch (e) {
+      document.querySelector("#digest-status").textContent = e.message || String(e);
+    }
     if (document.querySelector("#tab-sync")?.classList.contains("on")) {
-      await loadDoorway();
+      await loadDoorway().catch(() => {});
     }
   }
+
+  window.__lifeLoadDoorway = () => loadDoorway().catch(() => {});
 
   window.addEventListener("shelf-hub-ready", () => {
     setBridgeLabel();
@@ -730,7 +759,35 @@ ${mockShelf}
     const box = document.querySelector("#boot-error");
     box.hidden = false;
     box.textContent = "Failed: " + (error.message || error);
+    const bridge = document.querySelector("#bridge");
+    if (bridge) bridge.textContent = "Failed to start";
   });
+
+  window.__lifeBoot = boot;
+  </script>
+  <script>
+${rules}
+  </script>
+  <script>
+${model}
+  </script>
+  <script>
+${bills}
+  </script>
+  <script>
+${mockShelf}
+  </script>
+  <script>
+  (function () {
+    "use strict";
+    if (window.Shelf && Shelf.__hub) return;
+    if (!(window.Shelf && typeof Shelf.data?.get === "function")) return;
+    const bridge = document.querySelector("#bridge");
+    const stuck = bridge && /Connecting|Loading|Starting|Failed/i.test(bridge.textContent || "");
+    if (stuck && typeof window.__lifeBoot === "function") {
+      window.__lifeBoot().catch(() => {});
+    }
+  })();
   </script>
 </body>
 </html>
