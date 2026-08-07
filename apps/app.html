@@ -1081,9 +1081,10 @@
   function normalizeHubAppUrl(raw) {
     let url = String(raw || "").trim();
     if (!url) return "";
-    if (!/^https?:///i.test(url)) url = "http://" + url;
-    if (!//apps/app.html/i.test(url)) {
-      url = url.replace(//+$/, "") + "/apps/app.html";
+    if (!new RegExp("^https?://", "i").test(url)) url = "http://" + url;
+    if (url.indexOf("/apps/app.html") === -1) {
+      while (url.length > 1 && url.endsWith("/")) url = url.slice(0, -1);
+      url = url + "/apps/app.html";
     }
     return url;
   }
