@@ -41,7 +41,10 @@ function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
   });
   res.end(payload);
 }
@@ -145,6 +148,17 @@ function createServer(db, options = {}) {
       const { pathname } = url;
 
       if (pathname.startsWith("/api/")) {
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400"
+          });
+          res.end();
+          return;
+        }
+
         if (req.method === "GET" && pathname === "/api/health") {
           const doorway = await phoneDoorway.buildPhoneDoorway(projectRoot, {
             host: HOST,
@@ -527,19 +541,32 @@ function createServer(db, options = {}) {
         if (req.method === "POST" && pathname === "/api/groupme/client") {
           const body = await readBody(req);
           try {
-            if (body.groupId != null && body.token) {
-              const result = await groupme.saveCredentials(body.token, body.groupId);
+            const groupIds =
+              body.groupIds != null
+                ? body.groupIds
+                : body.groupId != null
+                  ? body.groupId
+                  : null;
+            if (body.token && groupIds != null) {
+              const result = await groupme.saveCredentials(
+                body.token,
+                groupIds,
+                body.groups || body.meta
+              );
               return sendJson(res, 200, result);
             }
-            if (body.token && body.groupId == null) {
+            if (body.token && groupIds == null) {
               const result = await groupme.saveToken(body.token);
               return sendJson(res, 200, result);
             }
-            if (body.groupId != null && !body.token) {
-              const result = await groupme.saveGroupId(body.groupId);
+            if (groupIds != null && !body.token) {
+              const result = await groupme.saveGroupIds(
+                groupIds,
+                body.groups || body.meta
+              );
               return sendJson(res, 200, result);
             }
-            throw new Error("Provide token and/or groupId");
+            throw new Error("Provide token and/or groupIds");
           } catch (error) {
             return sendJson(res, 400, { error: error.message || String(error) });
           }
@@ -568,6 +595,8 @@ function createServer(db, options = {}) {
               ok: true,
               mode: result.mode,
               emitted: result.emitted.length,
+              groupIds: result.groupIds || [],
+              byGroup: result.byGroup || {},
               error: result.error || null
             });
           } catch (error) {

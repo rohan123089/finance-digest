@@ -237,8 +237,13 @@ const html = `<!doctype html>
             placeholder="http://192.168.x.x:8787/apps/app.html">
         </label>
         <div class="toolbar">
+          <button type="button" class="act" id="hub-url-test">Test connection</button>
           <button type="button" class="act primary" id="hub-url-open">Open hub in Shelf</button>
         </div>
+        <p class="muted" style="margin-top:10px">
+          Use the exact URL from the laptop Sync tab. Phone + laptop must be on the same Wi‑Fi
+          (on Google Wi‑Fi, enable device-to-device / client-to-client). Windows Firewall must allow port 8787.
+        </p>
         <p class="muted" style="margin-top:10px">
           Example: <code>http://192.168.86.23:8787/apps/app.html</code>
         </p>
@@ -634,18 +639,56 @@ ${mockShelf}
     }
   }
 
+  function normalizeHubAppUrl(raw) {
+    let url = String(raw || "").trim();
+    if (!url) return "";
+    if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+    if (!/\/apps\/app\.html/i.test(url)) {
+      url = url.replace(/\/+$/, "") + "/apps/app.html";
+    }
+    return url;
+  }
+
+  document.querySelector("#hub-url-test")?.addEventListener("click", async () => {
+    const status = document.querySelector("#sync-status");
+    const url = normalizeHubAppUrl(document.querySelector("#hub-url-input")?.value);
+    if (!url) {
+      status.textContent = "Paste the hub URL first.";
+      return;
+    }
+    status.textContent = "Testing " + url + " …";
+    try {
+      const base = new URL(url);
+      const healthUrl = base.origin + "/api/health";
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
+      const res = await fetch(healthUrl, ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
+        status.textContent = "Reached something, but not the finance hub (HTTP " + res.status + ").";
+        return;
+      }
+      status.textContent =
+        "Reachable · LAN " + (body.lanBound ? "on" : "off") +
+        (body.phoneUrl ? " · " + body.phoneUrl : "") +
+        " — tap Open hub in Shelf.";
+      try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
+    } catch (e) {
+      status.textContent =
+        "Cannot reach hub from this phone (" + (e.name || "error") + "). Same Wi‑Fi? Firewall? Device-to-device on?";
+    }
+  });
+
   document.querySelector("#hub-url-open")?.addEventListener("click", () => {
     const input = document.querySelector("#hub-url-input");
-    let url = (input?.value || "").trim();
+    const url = normalizeHubAppUrl(input?.value);
     if (!url) {
       document.querySelector("#sync-status").textContent = "Paste the hub URL from the laptop Sync tab.";
       return;
     }
-    if (!/^https?:\\/\\//i.test(url)) url = "http://" + url;
-    if (!/\\/apps\\/app\\.html/i.test(url) && !/\\/apps\\/app\\.html\\?/i.test(url)) {
-      url = url.replace(/\\/+$/, "") + "/apps/app.html";
-    }
     try { localStorage.setItem("life.hubAppUrl", url); } catch (_e) {}
+    document.querySelector("#sync-status").textContent = "Opening " + url + " …";
     location.href = url;
   });
 
