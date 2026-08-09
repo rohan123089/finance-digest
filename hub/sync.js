@@ -9,6 +9,7 @@ const life = require("../engine/life.js");
 const billsEngine = require("../engine/bills.js");
 const syllabus = require("../engine/syllabus.js");
 const completion = require("../engine/completion.js");
+const digestContract = require("../engine/digest-contract.js");
 
 const CURRENT_VERSION = 1;
 const PRIOR_VERSION = 0;
@@ -1159,7 +1160,7 @@ function buildDigest(db) {
     asOfDate
   });
 
-  return {
+  const payload = {
     v: CURRENT_VERSION,
     generatedAt: new Date().toISOString(),
     date: asOfDate,
@@ -1195,6 +1196,23 @@ function buildDigest(db) {
       needsALook
     }
   };
+
+  const contract = digestContract.assertDigestContract(payload);
+  if (!contract.ok) {
+    try {
+      dbApi.setMeta(db, "digestContractViolation", contract.message);
+    } catch (_e) {
+      // ignore
+    }
+  } else {
+    try {
+      dbApi.setMeta(db, "digestContractViolation", "");
+    } catch (_e) {
+      // ignore
+    }
+  }
+
+  return payload;
 }
 
 async function ingestOutboxFile(db, projectRoot, syncRoot, filePath) {
@@ -1346,5 +1364,6 @@ module.exports = {
   icsForItemId,
   assertProtectedTier,
   isLearnedMutedItem,
-  isProtectedTodayRow
+  isProtectedTodayRow,
+  digestContract
 };

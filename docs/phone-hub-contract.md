@@ -104,11 +104,14 @@ file ingest **and** on LAN `POST /api/outbox`. `calendar.add` actions include an
 
 - **Morning glance** (`glance`): short summaries only — pressure, progress, nearest exam, study-next, clear/heavy. No housekeeping.
 - **Detail** (`detail`): full interactive lists (birthdays, standing bill reminders, events, tasks), watching, reading, junk, backlog items, topics, and `needsALook` (conflicts / confirm-me dates / coverage gaps).
+- Spec flat fields map 1:1 onto `glance.*` plus `detail.needsALook`. `needsALook` is never on the glance.
+- `examHorizon` / `studyNext` use integer `done`/`total` (phone shows "6 of 15"). `studyNext` may include `topicId` and `reading`.
+- `coverageGaps` entries may include `blocksClear: true` when a missing syllabus must not read as all-clear.
 - Life tasks/events may include `domain`. Bill rows use `kind: "bill"` with `bill.paid` / `dismiss`.
 - Events offer `rsvp.yes` / `rsvp.no` / `calendar.add`.
 - **Watching** / events from Google Calendar are the primary schedule source for the exam horizon.
 - Syllabus PDFs/emails are optional enrichment (topics/readings). Unmatched syllabus dates go to `needsALook.confirmDates` — they never auto-enter the glance.
-- Canvas live todos match onto calendar events when titles align; **calendar date wins** on conflict.
+- Canvas live todos match onto calendar events when titles align; **calendar date wins** on conflict. Unmatched Canvas items fill gaps.
 
 Standing bills live in the hub DB (`bills` table): monthly `dueDay`, `leadDays`
 before due, amount, active flag. Money UI manages them; Digest surfaces nags.

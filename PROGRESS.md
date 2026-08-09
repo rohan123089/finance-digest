@@ -8,29 +8,32 @@
 
 | | |
 |---|---|
-| **Done** | Audit; **A** (`62c84a1`); **B** (`f89ada0`); **C** (`f0922bc`) |
-| **Doing** | Section **D** — protected-tier (awaiting your review) |
-| **Next** | E → F |
+| **Done** | Audit; **A–D** committed (D=`4c8f914`) |
+| **Doing** | Section **E** — digest payload contract (awaiting your review) |
+| **Next** | **F** (outbox actions + Triage) |
 
-## Section D — ready for review (not committed)
+## Section E — ready for review (not committed)
 
-- Mutes still apply only to `signal.link` (reading/social)
-- Assembly calls `assertProtectedTier`: muted sources cannot swallow tasks/events/deadlines; muted reading cannot leak
-- Violations recorded on meta `protectedTierViolation`; hard-throw if `ASSERT_PROTECTED_TIER=1`
-- Test: muted class group keeps due-date change + mandatory event + examHorizon; hides meme link
+- Locked two-surface contract: `glance.*` + `detail.needsALook` (maps to flat spec fields)
+- `engine/digest-contract.js` validates shape; `buildDigest` records violations on meta
+- Guarantees: no `needsALook` on glance; integer `done`/`total`; empty `reading` when `heavyDay`
+- Docs updated in `docs/phone-hub-contract.md`
 
-## Key decisions
+### Final payload shape
 
-1. Calendar wins; Canvas fills gaps.
-2. Auto-closes inferred + reversible.
-3. Protected-tier assert is soft by default (meta), hard under env flag.
+```text
+{ v, generatedAt, date, asOfDate,
+  glance: { clearDay, heavyDay, anchor, examHorizon[], today[], backlog{open,overdue},
+            studyNext?, junk{count,targetRef}, reading[] },
+  detail: { today, watching, backlog, reading, junk, examHorizon, topics,
+            needsALook{ conflicts, confirmDates, coverageGaps } } }
+```
 
-## How to review D
+## How to review E
 
 ```bash
 cd C:\Projects\Life\finance-digest-glance
-node tests/section-d-protected.test.js
-node tests/glance-syllabus.test.js
+node tests/section-e-contract.test.js
 ```
 
-Say **commit D** when good, then **go E**.
+Say **commit E** when good, then **go F**.
