@@ -8,32 +8,24 @@
 
 | | |
 |---|---|
-| **Done** | Audit; **A–D** committed (D=`4c8f914`) |
-| **Doing** | Section **E** — digest payload contract (awaiting your review) |
-| **Next** | **F** (outbox actions + Triage) |
+| **Done** | Audit; **A–E** committed (E=`5c61fce`) |
+| **Doing** | Section **F** — outbox actions + Triage (awaiting your review) |
+| **Next** | Merge sibling repo into main hub when you’re ready |
 
-## Section E — ready for review (not committed)
+## Section F — ready for review (not committed)
 
-- Locked two-surface contract: `glance.*` + `detail.needsALook` (maps to flat spec fields)
-- `engine/digest-contract.js` validates shape; `buildDigest` records violations on meta
-- Guarantees: no `needsALook` on glance; integer `done`/`total`; empty `reading` when `heavyDay`
-- Docs updated in `docs/phone-hub-contract.md`
+- Existing: `markDone`, `markReviewed`, `unsubscribe`, `confirmDate` (verified)
+- **New:** `action.triage` → `glance.triageAvailable` + fuller `detail.triage` (overdue first)
+- **New:** `action.triage.ack` clears the tray
+- Digest UI: Triage button + panel
+- Contract docs list all outbox actions
 
-### Final payload shape
-
-```text
-{ v, generatedAt, date, asOfDate,
-  glance: { clearDay, heavyDay, anchor, examHorizon[], today[], backlog{open,overdue},
-            studyNext?, junk{count,targetRef}, reading[] },
-  detail: { today, watching, backlog, reading, junk, examHorizon, topics,
-            needsALook{ conflicts, confirmDates, coverageGaps } } }
-```
-
-## How to review E
+## How to review F
 
 ```bash
 cd C:\Projects\Life\finance-digest-glance
+node tests/section-f-outbox.test.js
 node tests/section-e-contract.test.js
 ```
 
-Say **commit E** when good, then **go F**.
+Say **commit F** when good, then we can plan the merge into `finance-digest`.

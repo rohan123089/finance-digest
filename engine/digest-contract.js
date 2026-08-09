@@ -150,6 +150,19 @@ function validateDigestContract(digest) {
     }
   );
 
+  // Triage is on-request: null when idle, array when action.triage was requested.
+  if ("triage" in digest.detail && digest.detail.triage != null) {
+    if (!Array.isArray(digest.detail.triage)) {
+      errors.push("detail.triage must be array or null");
+    }
+  }
+  if (
+    "triageAvailable" in digest.glance &&
+    typeof digest.glance.triageAvailable !== "boolean"
+  ) {
+    errors.push("glance.triageAvailable must be boolean when set");
+  }
+
   return errors;
 }
 

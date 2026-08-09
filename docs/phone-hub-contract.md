@@ -113,8 +113,22 @@ file ingest **and** on LAN `POST /api/outbox`. `calendar.add` actions include an
 - Syllabus PDFs/emails are optional enrichment (topics/readings). Unmatched syllabus dates go to `needsALook.confirmDates` — they never auto-enter the glance.
 - Canvas live todos match onto calendar events when titles align; **calendar date wins** on conflict. Unmatched Canvas items fill gaps.
 
+### Outbox actions (phone → hub)
+
+Execute once; next digest reflects the result:
+
+| Action | Effect |
+|---|---|
+| `action.markDone` `{taskId}` | Close a task/loop |
+| `action.markReviewed` `{topicId}` | Mark a syllabus topic reviewed (`clear:true` undoes) |
+| `action.unsubscribe` `{targetRef}` | Learn mute / unsubscribe |
+| `action.confirmDate` `{assessmentId}` | Approve a confirm-me assessment date into the horizon |
+| `action.triage` | Request fuller backlog → `detail.triage` + `glance.triageAvailable` |
+| `action.triage.ack` | Clear the triage tray |
+
 Standing bills live in the hub DB (`bills` table): monthly `dueDay`, `leadDays`
 before due, amount, active flag. Money UI manages them; Digest surfaces nags.
+
 ## DOWN — snapshot
 
 `snapshot-latest.json` is already aggregated and redacted. It contains no account

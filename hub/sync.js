@@ -210,6 +210,19 @@ function executePendingActions(db) {
       dbApi.markActionExecuted(db, item.id, "executed", "Muted / unsubscribed (learned)");
       return;
     }
+
+    // Triage: request a fuller backlog list on the next digest(s) until ack.
+    if (item.type === "action.triage") {
+      dbApi.setMeta(db, "triageRequested", new Date().toISOString());
+      dbApi.markActionExecuted(db, item.id, "executed", "Triage requested");
+      return;
+    }
+    if (item.type === "action.triage.ack" || item.type === "action.triage.done") {
+      dbApi.setMeta(db, "triageRequested", "");
+      dbApi.setMeta(db, "triagePayload", "[]");
+      dbApi.markActionExecuted(db, item.id, "executed", "Triage acknowledged");
+      return;
+    }
     if (
       (item.type === "action.bill.paid" || item.type === "action.bill.pay") &&
       item.data
@@ -665,6 +678,64 @@ function buildAnchor({ heavyDay, clearDay, examHorizon, studyNext, backlog, asOf
     backlog,
     asOfDate
   });
+}
+
+/**
+ * Fuller backlog for Triage (on request): open loops + pending events,
+ * overdue first, then soonest due.
+ */
+function buildTriageList(today, watching, asOfDate) {
+  const rows = [];
+  const push = (row, extra = {}) => {
+    if (!row?.id) return;
+    rows.push({
+      id: row.id,
+      title: row.title || row.name || "Item",
+      kind: row.kind || "task",
+      dueAt: row.dueAt || row.start || null,
+      overdue: Boolean(extra.overdue ?? isOverdueRow(row, asOfDate)),
+      domain: row.domain || null,
+      why: row.why || null,
+      protected: Boolean(row.protected),
+      status: row.status || null,
+      actions: Array.isArray(row.actions) ? row.actions : []
+    });
+  };
+
+  (today || []).forEach((row) => {
+    if (
+      row.kind === "task" ||
+      row.kind === "import" ||
+      row.kind === "bill" ||
+      row.kind === "deadline" ||
+      row.kind === "event"
+    ) {
+      push(row);
+    }
+  });
+
+  (watching || []).forEach((row) => {
+    push(row, { overdue: false });
+  });
+
+  // Dedupe by id, prefer first (today over watching).
+  const seen = new Set();
+  const unique = [];
+  rows.forEach((row) => {
+    if (seen.has(row.id)) return;
+    seen.add(row.id);
+    unique.push(row);
+  });
+
+  unique.sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.MAX_SAFE_INTEGER;
+    const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.MAX_SAFE_INTEGER;
+    if (aDue !== bDue) return aDue - bDue;
+    return String(a.title).localeCompare(String(b.title));
+  });
+
+  return unique;
 }
 
 function inferTopicCoverageFromCalendar(db) {
@@ -1160,6 +1231,17 @@ function buildDigest(db) {
     asOfDate
   });
 
+  const triageRequested = Boolean(dbApi.getMeta(db, "triageRequested", ""));
+  let triage = null;
+  if (triageRequested) {
+    triage = buildTriageList(today, watching, asOfDate);
+    try {
+      dbApi.setMeta(db, "triagePayload", JSON.stringify(triage));
+    } catch (_e) {
+      // ignore
+    }
+  }
+
   const payload = {
     v: CURRENT_VERSION,
     generatedAt: new Date().toISOString(),
@@ -1174,7 +1256,8 @@ function buildDigest(db) {
       backlog: backlogCounts,
       studyNext,
       junk: junkSummary,
-      reading: glanceReading
+      reading: glanceReading,
+      triageAvailable: triageRequested
     },
     detail: {
       today,
@@ -1193,7 +1276,8 @@ function buildDigest(db) {
         reviewed: t.reviewed,
         reviewedHow: t.reviewedHow
       })),
-      needsALook
+      needsALook,
+      triage
     }
   };
 
@@ -1365,5 +1449,6 @@ module.exports = {
   assertProtectedTier,
   isLearnedMutedItem,
   isProtectedTodayRow,
+  buildTriageList,
   digestContract
 };
