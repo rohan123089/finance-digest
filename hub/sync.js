@@ -182,6 +182,19 @@ function executePendingActions(db) {
       dbApi.markActionExecuted(db, item.id, "executed", "Settings updated");
       return;
     }
+    if (item.type === "action.budget.ratchet.accept" && item.data?.targetRef) {
+      const next = Number(item.data.targetRef.nextSavingsTarget);
+      if (Number.isFinite(next) && next >= 0) {
+        dbApi.saveSettings(db, { weeklySavingsTarget: next });
+      }
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        Number.isFinite(next) ? `Savings target raised to ${next}` : "Invalid target"
+      );
+      return;
+    }
     if (item.type === "action.bills.upsert" && item.data) {
       dbApi.upsertBill(db, item.data);
       dbApi.markActionExecuted(db, item.id, "executed", "Bill upserted");
@@ -210,7 +223,6 @@ function executePendingActions(db) {
       dbApi.markActionExecuted(db, item.id, "executed", "Muted / unsubscribed (learned)");
       return;
     }
-
     // Triage: request a fuller backlog list on the next digest(s) until ack.
     if (item.type === "action.triage") {
       dbApi.setMeta(db, "triageRequested", new Date().toISOString());
@@ -505,6 +517,25 @@ function moneyTasksFromSnapshot(db) {
     });
   }
   return tasks;
+}
+
+function budgetFlagSuppressed(db, flagId, asOfDate) {
+  return dbApi.listSyncItems(db).some((item) => {
+    if (
+      item.data?.targetRef?.itemId !== flagId ||
+      ![
+        "action.dismiss",
+        "action.snooze",
+        "action.budget.ratchet.accept"
+      ].includes(item.type)
+    ) {
+      return false;
+    }
+    if (item.type === "action.dismiss") return true;
+    if (item.type === "action.budget.ratchet.accept") return true;
+    const until = item.data?.targetRef?.until;
+    return !until || until >= asOfDate;
+  });
 }
 
 /** Drop stale AI flags that no longer match the live redacted snapshot. */
@@ -995,6 +1026,48 @@ function buildDigest(db) {
     }
   });
 
+  const deterministicSnapshot = dbApi.redactSnapshot(dbApi.computeLiveSnapshot(db));
+  (deterministicSnapshot.flags || []).forEach((flag) => {
+    if (!flag?.id || budgetFlagSuppressed(db, flag.id, asOfDate)) return;
+    const actions =
+      flag.trigger === "underspend streak"
+        ? [
+            {
+              type: "budget.ratchet.accept",
+              targetRef: {
+                itemId: flag.id,
+                nextSavingsTarget: flag.nextSavingsTarget
+              }
+            },
+            { type: "dismiss", targetRef: { itemId: flag.id } }
+          ]
+        : [
+            {
+              type: "snooze",
+              targetRef: {
+                itemId: flag.id,
+                until: new Date(
+                  Date.parse(`${asOfDate}T12:00:00Z`) + 7 * 24 * 60 * 60 * 1000
+                )
+                  .toISOString()
+                  .slice(0, 10)
+              }
+            },
+            { type: "dismiss", targetRef: { itemId: flag.id } }
+          ];
+    today.push({
+      kind: "nudge",
+      id: flag.id,
+      title: flag.action || flag.why || "Money nudge",
+      why: flag.why || null,
+      dollarValue: flag.dollarValue,
+      deadline: flag.deadline || null,
+      confidence: flag.confidence,
+      sortKey: Number.MAX_SAFE_INTEGER,
+      actions
+    });
+  });
+
   billsEngine.upcomingReminders(dbApi.listBills(db), asOfDate).forEach((row) => {
     const id = `bill:${row.bill.id.replace(/^bill:/, "")}:${row.periodKey}`;
     if (today.some((item) => item.id === id)) return;
@@ -1177,6 +1250,11 @@ function buildDigest(db) {
     examHorizon.some((e) => syllabus.daysUntil(e.date, asOfDate) <= HEAVY_EXAM_DAYS) ||
     backlogCounts.overdue >= HEAVY_OVERDUE ||
     backlogCounts.open >= HEAVY_OPEN;
+  if (heavyDay) {
+    for (let index = today.length - 1; index >= 0; index -= 1) {
+      if (today[index].kind === "nudge") today.splice(index, 1);
+    }
+  }
 
   const glanceToday = today
     .filter((row) => row.protected)
@@ -1363,8 +1441,16 @@ async function publishDown(db, projectRoot, syncRoot) {
     safeToSpend: {
       period: full.safeToSpend.period,
       amount: full.safeToSpend.amount,
+      income: full.safeToSpend.income,
+      committed: full.safeToSpend.committed,
+      savingsTarget: full.safeToSpend.savingsTarget,
       spent: full.safeToSpend.spent,
       remaining: full.safeToSpend.remaining
+    },
+    categoryDiagnostics: full.categoryDiagnostics || {
+      categories: [],
+      leakFlag: null,
+      envelopeSuggestions: []
     },
     flags: full.flags || []
   };

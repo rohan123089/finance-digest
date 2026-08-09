@@ -72,8 +72,8 @@ async function main() {
   );
   const digest = await cryptoUtil.decryptJson(projectRoot, digestBytes);
   assert.equal(digest.v, 1);
-  assert.ok(digest.today.some((item) => item.kind === "birthday"));
-  assert.ok(digest.junk.some((item) => item.action === "unsubscribe"));
+  assert.ok(digest.detail.today.some((item) => item.kind === "birthday"));
+  assert.ok(digest.detail.junk.some((item) => item.action === "unsubscribe"));
 
   // Refuse newer envelope versions.
   let refused = false;

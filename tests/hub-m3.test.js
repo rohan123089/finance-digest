@@ -75,6 +75,8 @@ async function main() {
   for (const name of [
     "groupme.token",
     "groupme.groupId",
+    "groupme.groupIds",
+    "groupme.groupMeta",
     "email.clientId",
     "email.clientSecret",
     "email.refreshToken",
@@ -105,41 +107,42 @@ async function main() {
       () => connectors.runBank(db, { forceMock: false }),
       /mock|configured|Bank/i
     );
+
+    const server = createServer(db, { projectRoot, syncRoot });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+
+    const health = await request(port, "GET", "/api/health");
+    assert.ok(["M3", "M4", "M5", "M6", "M7"].includes(health.body.milestone));
+    assert.equal(typeof health.body.connectors, "object");
+    assert.equal(health.body.connectors["groupme.token"], false);
+
+    const run = await request(port, "POST", "/api/connectors/run", {
+      forceMock: true
+    });
+    assert.equal(run.status, 200);
+    assert.equal(run.body.forceMock, true);
+    assert.equal(run.body.groupme.mode, "mock");
+    assert.equal(typeof run.body.groupme.emitted, "number");
+    assert.equal(JSON.stringify(run.body).includes("token"), false);
+
+    const digest = await request(port, "GET", "/api/digest");
+    assert.ok(digest.body.detail.today.some((item) => item.kind === "event"));
+    assert.ok(digest.body.detail.reading.some((item) => item.source === "newsletter"));
+
+    // Default connector run must not inject mock data.
+    const liveDefault = await request(port, "POST", "/api/connectors/run", {});
+    assert.equal(liveDefault.status, 200);
+    assert.equal(liveDefault.body.forceMock, false);
+
+    await new Promise((resolve) => server.close(resolve));
+    db.close();
   } finally {
     for (const [name, value] of Object.entries(priorSecrets)) {
       if (value) await secretStore.setConnectorSecret(name, value);
     }
   }
 
-  const server = createServer(db, { projectRoot, syncRoot });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
-
-  const health = await request(port, "GET", "/api/health");
-  assert.ok(["M3", "M4", "M5", "M6", "M7"].includes(health.body.milestone));
-  assert.equal(typeof health.body.connectors, "object");
-  assert.equal(health.body.connectors["groupme.token"], false);
-
-  const run = await request(port, "POST", "/api/connectors/run", {
-    forceMock: true
-  });
-  assert.equal(run.status, 200);
-  assert.equal(run.body.forceMock, true);
-  assert.equal(run.body.groupme.mode, "mock");
-  assert.equal(typeof run.body.groupme.emitted, "number");
-  assert.equal(JSON.stringify(run.body).includes("token"), false);
-
-  const digest = await request(port, "GET", "/api/digest");
-  assert.ok(digest.body.today.some((item) => item.kind === "event"));
-  assert.ok(digest.body.reading.some((item) => item.source === "newsletter"));
-
-  // Default connector run must not inject mock data.
-  const liveDefault = await request(port, "POST", "/api/connectors/run", {});
-  assert.equal(liveDefault.status, 200);
-  assert.equal(liveDefault.body.forceMock, false);
-
-  await new Promise((resolve) => server.close(resolve));
-  db.close();
   console.log("Hub M3 connector checks passed.");
 }
 

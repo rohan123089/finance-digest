@@ -191,11 +191,25 @@
         Number.isFinite(tx.amount) &&
         tx.amount > 0
     );
+    // Card statement "PAYMENT RECEIVED" may already be typed as transfer with no target.
+    const orphanCardCredits = (transactions || []).filter(
+      (tx) =>
+        tx &&
+        !tx.duplicateOf &&
+        !used.has(tx.id) &&
+        tx.direction === "transfer" &&
+        !tx.transferAccount &&
+        Number.isFinite(tx.amount) &&
+        tx.amount > 0 &&
+        (accountTypes[tx.account] || tx.accountType) === "liability" &&
+        looksLikeCardPaymentCredit(tx.merchant || tx.rawMerchant)
+    );
+    const oppositeLegs = [...open, ...orphanCardCredits];
     transfers.forEach((src) => {
       if (used.has(src.id)) return;
       let best = null;
       let bestScore = -1;
-      open.forEach((leg) => {
+      oppositeLegs.forEach((leg) => {
         if (used.has(leg.id) || used.has(src.id)) return;
         if (leg.id === src.id) return;
         if (leg.account !== src.transferAccount) return;
@@ -207,7 +221,7 @@
           score += 5;
         }
         const legType = accountTypes[leg.account] || leg.accountType;
-        if (legType === "liability" && looksLikeCardPaymentCredit(leg.merchant)) {
+        if (legType === "liability" && looksLikeCardPaymentCredit(leg.merchant || leg.rawMerchant)) {
           score += 8;
         }
         if (score > bestScore) {

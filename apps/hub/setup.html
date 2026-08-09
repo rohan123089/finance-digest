@@ -111,6 +111,8 @@
     <div class="nav">
       <a class="back" href="/apps/hub/home.html">← Exit setup</a>
       <a href="/apps/app.html">Open app</a>
+      <a href="/apps/money/money.html">Full Money (PDF import)</a>
+      <a href="/apps/digest/digest.html">Full Digest</a>
     </div>
 
     <div class="eyebrow">Laptop only</div>
@@ -156,7 +158,7 @@
 
     <section>
       <h2>GroupMe</h2>
-      <p>Pull chat plans and deadlines from one GroupMe group into Digest.</p>
+      <p>Pull chat plans and deadlines from one or more GroupMe groups into Digest.</p>
       <a class="goto" href="/apps/hub/groupme.html">Open GroupMe →</a>
     </section>
 
@@ -176,11 +178,21 @@
 
     <section>
       <h2>Run connectors once</h2>
-      <p>Live-or-skip by default (no mock data). Needs secrets above where used.</p>
+      <p>Live-or-skip by default (no mock data). Needs secrets above where used. Google Calendar uses the same OAuth as Gmail — reconnect Gmail once if Calendar was not granted.</p>
       <div class="row">
         <button type="button" id="connectors-run">Run now</button>
       </div>
       <div class="meta" id="connectors-status"></div>
+    </section>
+
+    <section>
+      <h2>Digest preferences</h2>
+      <p>Rules learned from Digest actions (mute sender, drop GroupMe group, school domain). Manage Undo on the Digest page.</p>
+      <div class="row">
+        <button type="button" id="learned-refresh">Count digest rules</button>
+        <a href="/apps/digest/digest.html" style="color:#74b9ff;align-self:center">Open Digest</a>
+      </div>
+      <div class="meta" id="learned-status"></div>
     </section>
   </main>
   <script>
@@ -202,7 +214,7 @@
           pill("SimpleFIN", Boolean(c["simplefin.accessUrl"])),
           pill("Gmail", Boolean(c["email.refreshToken"] || c["email.1.refreshToken"] || c["email.2.refreshToken"] || c["email.3.refreshToken"])),
           pill("Canvas", Boolean(c["canvas.token"])),
-          pill("GroupMe", Boolean(c["groupme.token"] && c["groupme.groupId"])),
+          pill("GroupMe", Boolean(c["groupme.token"] && (c["groupme.groupIds"] || c["groupme.groupId"]))),
           pill("Bank JSON", Boolean(c["bank.token"]))
         ].join("");
         meta.textContent = `Fingerprint ${h.syncKeyFingerprint || "—"} · AI ${h.aiMode || "OFF"}`;
@@ -245,12 +257,31 @@
         });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error || "run failed");
-        const parts = ["groupme", "email", "bank", "canvas", "simplefin", "sms", "rewards"]
+        const parts = ["groupme", "email", "gcal", "bank", "canvas", "simplefin", "sms", "rewards"]
           .filter((k) => body[k])
-          .map((k) => `${k}:${body[k].mode || "?"}`);
+          .map((k) => {
+            const row = body[k];
+            const n = row.emitted != null ? `:${row.emitted}` : row.inserted != null ? `:${row.inserted}` : "";
+            return `${k}:${row.mode || "?"}${n}`;
+          });
         status.innerHTML = `<span class="ok">${parts.join(" · ") || "done"}</span>`;
       } catch (error) {
         status.innerHTML = `<span class="error">${error.message || error}</span>`;
+      }
+    });
+
+    document.querySelector("#learned-refresh")?.addEventListener("click", async () => {
+      const box = document.querySelector("#learned-status");
+      if (!box) return;
+      box.textContent = "Loading…";
+      try {
+        const res = await fetch("/api/learned?scope=digest");
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || "learned failed");
+        const active = (body.rules || []).filter((r) => r.active);
+        box.innerHTML = `<span class="ok">${active.length} active digest rule(s)</span> · <a href="/apps/digest/digest.html">Open Digest</a>`;
+      } catch (error) {
+        box.innerHTML = `<span class="error">${error.message || error}</span>`;
       }
     });
 

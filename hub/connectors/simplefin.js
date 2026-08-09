@@ -219,16 +219,13 @@ async function syncToDb(db, options = {}) {
     const shouldUpdateOpening =
       options.updateOpeningBalance !== false && modelBalance != null;
     if (shouldUpdateOpening) {
-      // Reconcile: opening + activity from stored txs = institution balance.
-      // Otherwise invested/cash stay at $0 while only recent tx deltas show.
+      // Live institution balance is source of truth for SimpleFIN-linked cards/
+      // banks. Opening is reconciled from *this account's own* txs only —
+      // UWCU→Amex payment transfers must not double-count against Amex's feed.
       const maps = dbApi.getAccountMaps(db);
+      const ownTxs = dbApi.listTransactions(db).filter((tx) => tx.account === local.id);
       const activity = Model.accountActivityDelta(
-        dbApi.listTransactions(db).filter((tx) => {
-          if (tx.account === local.id) return true;
-          if (tx.direction !== "transfer") return false;
-          const target = tx.transferAccount || tx.suggestedTransferAccount;
-          return target === local.id;
-        }),
+        ownTxs,
         local.id,
         local.type,
         maps.accountTypes
@@ -237,9 +234,19 @@ async function syncToDb(db, options = {}) {
       const holdings = Model.normalizeHoldings(remoteAccount.holdings || []);
       dbApi.updateAccount(db, local.id, {
         openingBalance: opening,
+        reportedBalance: modelBalance,
+        reportedAt: new Date().toISOString(),
         holdings
       });
       local = dbApi.getAccount(db, local.id);
+    } else if (modelBalance != null) {
+      dbApi.updateAccount(db, local.id, {
+        reportedBalance: modelBalance,
+        reportedAt: new Date().toISOString(),
+        holdings: Array.isArray(remoteAccount.holdings)
+          ? Model.normalizeHoldings(remoteAccount.holdings)
+          : undefined
+      });
     } else if (Array.isArray(remoteAccount.holdings)) {
       dbApi.updateAccount(db, local.id, {
         holdings: Model.normalizeHoldings(remoteAccount.holdings)
@@ -285,6 +292,116 @@ async function syncToDb(db, options = {}) {
   };
 }
 
+/**
+ * Background SimpleFIN balance/tx pull. Default every 30 minutes while hub runs.
+ * Set HUB_SIMPLEFIN_POLL_MS=0 (or HUB_SIMPLEFIN_AUTO=0) to disable.
+ */
+function startAutoSync(db, options = {}) {
+  const envPoll = process.env.HUB_SIMPLEFIN_POLL_MS;
+  const envAuto = process.env.HUB_SIMPLEFIN_AUTO;
+  if (envAuto === "0" || envAuto === "false") {
+    return { enabled: false, intervalMs: 0, stop() {} };
+  }
+  const intervalMs = Number(
+    envPoll != null && envPoll !== ""
+      ? envPoll
+      : options.intervalMs != null
+        ? options.intervalMs
+        : 30 * 60 * 1000
+  );
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    return { enabled: false, intervalMs: 0, stop() {} };
+  }
+
+  let timer = null;
+  let running = false;
+  const onResult =
+    typeof options.onResult === "function" ? options.onResult : async () => {};
+  const log =
+    typeof options.log === "function" ? options.log : (msg) => console.log(msg);
+
+  async function tick(reason) {
+    if (running) return;
+    running = true;
+    try {
+      const accessUrl = await secretStore.getConnectorSecret("simplefin.accessUrl");
+      if (!accessUrl) {
+        dbApi.setMeta(db, "simplefinAutoSync", JSON.stringify({
+          enabled: true,
+          intervalMs,
+          lastAttemptAt: new Date().toISOString(),
+          lastStatus: "skipped",
+          reason: "not configured"
+        }));
+        return;
+      }
+      const result = await syncToDb(db, {
+        fetchImpl: options.fetchImpl,
+        updateOpeningBalance: options.updateOpeningBalance !== false
+      });
+      dbApi.setMeta(db, "simplefinAutoSync", JSON.stringify({
+        enabled: true,
+        intervalMs,
+        lastAttemptAt: new Date().toISOString(),
+        lastSuccessAt: new Date().toISOString(),
+        lastStatus: result.mode || "ok",
+        reason: reason || "poll",
+        inserted: result.inserted || 0,
+        updated: result.updated || 0
+      }));
+      await onResult(result);
+      log(
+        `SimpleFIN auto-sync (${reason || "poll"}): ${result.mode}, ` +
+          `+${result.inserted || 0} tx, updated openings/balances`
+      );
+    } catch (error) {
+      dbApi.setMeta(db, "simplefinAutoSync", JSON.stringify({
+        enabled: true,
+        intervalMs,
+        lastAttemptAt: new Date().toISOString(),
+        lastStatus: "error",
+        reason: reason || "poll",
+        error: error.message || String(error)
+      }));
+      log(`SimpleFIN auto-sync failed: ${error.message || error}`);
+    } finally {
+      running = false;
+    }
+  }
+
+  // First pull shortly after boot so payments land without opening SimpleFIN UI.
+  const bootDelayMs = Number(options.bootDelayMs != null ? options.bootDelayMs : 8000);
+  const bootTimer = setTimeout(() => tick("boot"), Math.max(0, bootDelayMs));
+  timer = setInterval(() => tick("interval"), intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  if (typeof bootTimer.unref === "function") bootTimer.unref();
+
+  dbApi.setMeta(db, "simplefinAutoSync", JSON.stringify({
+    enabled: true,
+    intervalMs,
+    startedAt: new Date().toISOString()
+  }));
+
+  return {
+    enabled: true,
+    intervalMs,
+    stop() {
+      clearTimeout(bootTimer);
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+    runNow: () => tick("manual")
+  };
+}
+
+function readAutoSyncStatus(db) {
+  try {
+    return JSON.parse(dbApi.getMeta(db, "simplefinAutoSync", "null"));
+  } catch (_error) {
+    return null;
+  }
+}
+
 module.exports = {
   decodeSetupToken,
   parseAccessUrl,
@@ -293,5 +410,7 @@ module.exports = {
   listRemoteAccounts,
   modelBalanceFromRemote,
   directionHintFromSigned,
-  syncToDb
+  syncToDb,
+  startAutoSync,
+  readAutoSyncStatus
 };

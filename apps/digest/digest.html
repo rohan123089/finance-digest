@@ -86,6 +86,53 @@
       border-bottom: 1px solid var(--line);
       font-size: 14px;
     }
+    .domain-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px 14px 0;
+    }
+    .domain-chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #18212c;
+      color: var(--muted);
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .domain-chip.on {
+      background: #1a3348;
+      color: var(--blue);
+      border-color: #3a5a78;
+      font-weight: 700;
+    }
+    .domain-group {
+      margin-top: 8px;
+      padding-top: 4px;
+    }
+    .domain-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin: 8px 0 2px;
+    }
+    .domain-pill {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-right: 6px;
+      vertical-align: 1px;
+    }
+    .domain-pill.personal { background: #1a2e24; color: var(--accent); }
+    .domain-pill.school { background: #1a2a3d; color: var(--blue); }
+    .domain-pill.professional { background: #2e2818; color: var(--warn); }
     .list { padding: 8px 14px 14px; }
     .item {
       padding: 10px 0;
@@ -107,7 +154,7 @@
   <main class="app" id="app" hidden>
     <header>
       <div>
-        <div class="eyebrow">Daily card</div>
+        <div class="eyebrow">Morning glance · Detail</div>
         <h1>Digest</h1>
       </div>
       <div class="actions">
@@ -116,13 +163,33 @@
           <div id="bridge-detail">Rules-assembled · offline-first</div>
         </div>
         <button type="button" id="refresh">Refresh</button>
+        <button type="button" id="triage-request">Triage</button>
         <button type="button" class="primary" id="ai-propose">Propose nudges</button>
+        <a href="/apps/money/money.html" style="color:var(--accent);font-size:13px;align-self:center">Full Money</a>
+        <a href="/apps/app.html" style="color:var(--muted);font-size:13px;align-self:center">Phone app</a>
       </div>
     </header>
 
+    <section id="glance" style="margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb, var(--panel) 92%, transparent);padding:14px 16px;min-height:0">
+      <h2 style="margin:0 0 8px;font-size:15px">Morning glance</h2>
+      <p id="glance-anchor" style="margin:0 0 10px;font-size:16px;line-height:1.35"></p>
+      <div id="glance-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;color:var(--muted);font-size:12px"></div>
+      <div id="glance-horizon" class="list" style="padding:0"></div>
+      <div id="glance-study" class="meta" style="margin-top:8px"></div>
+      <div id="glance-today" class="list" style="padding:0;margin-top:8px"></div>
+      <div id="glance-reading" class="meta" style="margin-top:8px"></div>
+    </section>
+
+    <div class="eyebrow" style="margin:4px 0 8px">Detail — full lists &amp; housekeeping</div>
     <div class="grid">
       <section>
         <h2>Today</h2>
+        <div class="domain-bar" id="domain-bar" aria-label="Filter by life domain">
+          <button type="button" class="domain-chip on" data-domain="all">All</button>
+          <button type="button" class="domain-chip" data-domain="personal">Personal</button>
+          <button type="button" class="domain-chip" data-domain="school">School</button>
+          <button type="button" class="domain-chip" data-domain="professional">Professional</button>
+        </div>
         <div class="list" id="today"></div>
       </section>
       <section class="watching">
@@ -138,6 +205,24 @@
         <div class="list" id="junk"></div>
       </section>
     </div>
+    <section id="triage-panel" hidden style="margin-top:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb, var(--panel) 92%, transparent);padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px">
+        <h2 style="margin:0;font-size:15px">Triage</h2>
+        <button type="button" class="tiny" id="triage-ack">Done</button>
+      </div>
+      <p class="meta" style="margin:0 0 8px">Fuller backlog on request — overdue first. Not on the morning glance.</p>
+      <div class="list" id="triage-list"></div>
+    </section>
+    <section style="margin-top:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb, var(--panel) 92%, transparent);padding:12px 14px">
+      <h2 style="margin:0 0 8px;font-size:15px">Needs a look</h2>
+      <p class="meta" style="margin:0 0 8px">Conflicts, confirm-me dates, and coverage gaps — not on the morning glance.</p>
+      <div class="list" id="needs-a-look"></div>
+    </section>
+    <section style="margin-top:12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb, var(--panel) 92%, transparent);padding:12px 14px">
+      <h2 style="margin:0 0 8px;font-size:15px">Learned preferences</h2>
+      <p class="meta" style="margin:0 0 8px">From Going / Not going / Dismiss / Unsubscribe. Undo to reverse. Mute a GroupMe group only via the button below an item (never from one Not going).</p>
+      <div class="list" id="learned"></div>
+    </section>
     <p class="status" id="status">Loading…</p>
   </main>
   <p class="status" id="boot-error" hidden style="margin:40px auto;width:min(520px,90%)"></p>
@@ -146,6 +231,10 @@
   <script src="../shelf/mock-shelf.js"></script>
   <script>
     "use strict";
+
+    const DOMAIN_ORDER = ["personal", "school", "professional"];
+    let digestCache = null;
+    let domainFilter = "all";
 
     function escapeHtml(value) {
       const el = document.createElement("span");
@@ -158,6 +247,17 @@
         ? globalThis.crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       return `${prefix}:${suffix}`;
+    }
+
+    function normalizeDomain(value) {
+      const d = String(value || "").toLowerCase();
+      return DOMAIN_ORDER.includes(d) ? d : "";
+    }
+
+    function domainPill(domain) {
+      const d = normalizeDomain(domain);
+      if (!d) return "";
+      return `<span class="domain-pill ${d}">${escapeHtml(d)}</span>`;
     }
 
     function renderItems(selector, items, mapper, emptyText) {
@@ -178,6 +278,8 @@
         "rsvp.yes": "Going",
         "rsvp.no": "Not going",
         "bill.paid": "Paid",
+        "budget.ratchet.accept": "Save more",
+        snooze: "Snooze",
         dismiss: "Dismiss",
         ack: "Ack",
         rsvp: "RSVP",
@@ -187,10 +289,14 @@
         .map((action) => {
           const label = labels[action.type] || action.type;
           const href = action.targetRef?.href;
-          if (action.type === "import.statement" && href) {
+          if ((action.type === "import.statement" || action.type === "calendar.add") && href) {
             return (
               `<a class="tiny digest-action" style="display:inline-block;text-decoration:none" ` +
-              `href="${escapeHtml(href)}">${escapeHtml(label)}</a>`
+              `href="${escapeHtml(href)}" ` +
+              (action.type === "calendar.add" ? `download ` : "") +
+              `data-type="${escapeHtml(action.type)}" ` +
+              `data-ref="${escapeHtml(JSON.stringify(action.targetRef || {}))}">` +
+              `${escapeHtml(label)}</a>`
             );
           }
           return (
@@ -203,46 +309,319 @@
         .join("");
     }
 
+    function todayItemHtml(item) {
+      const when = item.dueAt || item.start ||
+        (item.month && item.day ? `${item.month}/${item.day}` : "");
+      const source = item.source ? ` · ${item.source}` : "";
+      const learnBtns = [];
+      if (item.from && String(item.from).includes("@")) {
+        learnBtns.push(
+          `<button type="button" class="tiny learn-action" data-learn="mute-sender" data-from="${escapeHtml(item.from)}">Always mute sender</button>`
+        );
+      }
+      if (item.groupId) {
+        learnBtns.push(
+          `<button type="button" class="tiny learn-action" data-learn="mute-group" data-group="${escapeHtml(item.groupId)}">Mute this GroupMe group</button>`
+        );
+      }
+      if (item.calendarId) {
+        learnBtns.push(
+          `<button type="button" class="tiny learn-action" data-learn="mute-cal" data-cal="${escapeHtml(item.calendarId)}">Mute this calendar</button>`
+        );
+      }
+      if (item.domain !== "school" && (item.from || item.source === "email")) {
+        learnBtns.push(
+          `<button type="button" class="tiny learn-action" data-learn="always-school" data-from="${escapeHtml(item.from || "")}">Always school</button>`
+        );
+      }
+      return `
+        <div class="item" data-domain="${escapeHtml(normalizeDomain(item.domain) || "other")}">
+          <strong>${domainPill(item.domain)}${escapeHtml(item.kind)} · ${escapeHtml(item.title || item.name)}</strong>
+          <div class="meta">${escapeHtml(when)}${escapeHtml(source)}${item.why ? ` · ${escapeHtml(item.why)}` : ""}</div>
+          ${actionButtons(item.actions)}
+          ${learnBtns.length ? `<div>${learnBtns.join("")}</div>` : ""}
+        </div>`;
+    }
+
+    function learnedRuleLabel(rule) {
+      const effect = rule.effect;
+      const key = rule.matchKey;
+      if (effect === "mute") return `Mute ${rule.matchKind} ${key}`;
+      if (effect === "junk_reading") return `Junk links from ${key}`;
+      if (effect === "force_kind") {
+        const kind = rule.effectValue?.kind || "?";
+        return `${kind} for ${rule.matchKind} ${key}`;
+      }
+      if (effect === "set_domain") {
+        return `${rule.effectValue?.domain || "domain"} for ${rule.matchKind} ${key}`;
+      }
+      return `${effect} · ${rule.matchKind}:${key}`;
+    }
+
+    function renderLearned(rules) {
+      const root = document.querySelector("#learned");
+      const rows = rules || [];
+      if (!rows.length) {
+        root.innerHTML = `<div class="empty">Nothing learned yet — Dismiss / Not going / Unsubscribe will teach Digest.</div>`;
+        return;
+      }
+      root.innerHTML = rows
+        .map((rule) => {
+          const pending =
+            !rule.active &&
+            rule.evidence?.threshold &&
+            (rule.hitCount || 0) < rule.evidence.threshold;
+          return `
+        <div class="item">
+          <strong>${escapeHtml(learnedRuleLabel(rule))}${pending ? " (pending)" : ""}</strong>
+          <div class="meta">hits ${escapeHtml(rule.hitCount || 0)}${pending ? ` · need ${escapeHtml(rule.evidence.threshold)} before drop applies` : ""}</div>
+          <button type="button" class="tiny learned-undo" data-id="${escapeHtml(rule.id)}">Undo</button>
+        </div>`;
+        })
+        .join("");
+    }
+
+    function connectorsLine(run) {
+      if (!run || typeof run !== "object") return "";
+      const keys = ["email", "groupme", "canvas", "gcal", "sms"];
+      const parts = keys
+        .filter((k) => run[k])
+        .map((k) => {
+          const row = run[k];
+          const n = row.emitted != null ? row.emitted : row.inserted;
+          const err = row.error ? `!` : "";
+          return `${k} ${row.mode || "?"}${n != null ? `:${n}` : ""}${err}`;
+        });
+      return parts.length ? ` · pull ${parts.join(" · ")}` : "";
+    }
+
+    function renderToday(items) {
+      const root = document.querySelector("#today");
+      const filtered = (items || []).filter((item) => {
+        if (domainFilter === "all") return true;
+        return normalizeDomain(item.domain) === domainFilter;
+      });
+      if (!filtered.length) {
+        root.innerHTML = `<div class="empty">${
+          domainFilter === "all"
+            ? "Nothing for today yet"
+            : `Nothing in ${domainFilter} today`
+        }</div>`;
+        return;
+      }
+      if (domainFilter !== "all") {
+        root.innerHTML = filtered.map(todayItemHtml).join("");
+        return;
+      }
+      const groups = {
+        personal: [],
+        school: [],
+        professional: [],
+        other: []
+      };
+      filtered.forEach((item) => {
+        const d = normalizeDomain(item.domain);
+        (groups[d] || groups.other).push(item);
+      });
+      const labels = {
+        personal: "Personal",
+        school: "School",
+        professional: "Professional",
+        other: "Other"
+      };
+      root.innerHTML = ["personal", "school", "professional", "other"]
+        .filter((key) => groups[key].length)
+        .map((key) => {
+          return (
+            `<div class="domain-group">` +
+            `<div class="domain-label">${labels[key]}</div>` +
+            groups[key].map(todayItemHtml).join("") +
+            `</div>`
+          );
+        })
+        .join("");
+    }
+
+    function detailOf(digest) {
+      return digest?.detail || digest || {};
+    }
+
+    function glanceOf(digest) {
+      return digest?.glance || {};
+    }
+
+    function renderGlance(digest) {
+      const g = glanceOf(digest);
+      const anchor = document.querySelector("#glance-anchor");
+      const chips = document.querySelector("#glance-chips");
+      const horizon = document.querySelector("#glance-horizon");
+      const study = document.querySelector("#glance-study");
+      const todayEl = document.querySelector("#glance-today");
+      const readingEl = document.querySelector("#glance-reading");
+      if (!anchor) return;
+
+      if (g.clearDay) {
+        anchor.textContent = g.anchor || "You're clear today.";
+      } else {
+        anchor.textContent = g.anchor || "—";
+      }
+      const chipParts = [];
+      if (g.clearDay) chipParts.push("clear day");
+      if (g.heavyDay) chipParts.push("heavy day");
+      if (g.backlog) {
+        chipParts.push(`${g.backlog.open} open · ${g.backlog.overdue} overdue`);
+      }
+      if (g.junk?.count) chipParts.push(`${g.junk.count} junk`);
+      chips.textContent = chipParts.join(" · ") || "—";
+
+      const exams = g.examHorizon || [];
+      horizon.innerHTML = exams.length
+        ? exams
+            .map(
+              (e) =>
+                `<div class="item"><strong>${escapeHtml(e.name)}</strong>` +
+                `<div class="meta">${escapeHtml(e.when)}` +
+                (e.total > 0 ? ` · ${e.done} of ${e.total}` : "") +
+                `</div></div>`
+            )
+            .join("")
+        : `<div class="empty">No assessments in horizon</div>`;
+
+      if (g.studyNext?.topic) {
+        study.textContent =
+          `Study next: ${g.studyNext.topic}` +
+          (g.studyNext.reading ? ` (${g.studyNext.reading})` : "") +
+          (g.studyNext.total > 0
+            ? ` · ${g.studyNext.done} of ${g.studyNext.total}`
+            : "");
+      } else {
+        study.textContent = "";
+      }
+
+      const gt = g.today || [];
+      todayEl.innerHTML = gt.length
+        ? gt
+            .map(
+              (row) =>
+                `<div class="item"><strong>${escapeHtml(row.title)}</strong>` +
+                `<div class="meta">${escapeHtml(row.kind)}` +
+                (row.time ? ` · ${escapeHtml(row.time)}` : "") +
+                ` · protected</div></div>`
+            )
+            .join("")
+        : "";
+
+      const reading = g.reading || [];
+      readingEl.textContent = g.heavyDay
+        ? "Reading quieted (heavy day)"
+        : reading.length
+          ? `Reading: ${reading.map((r) => r.title).join(" · ")}`
+          : "";
+    }
+
+    function renderNeedsALook(detail) {
+      const root = document.querySelector("#needs-a-look");
+      if (!root) return;
+      const n = detail.needsALook || {};
+      const rows = [];
+      (n.conflicts || []).forEach((c) => {
+        rows.push(
+          `<div class="item"><strong>Conflict · ${escapeHtml(c.kind)}</strong>` +
+            `<div class="meta">${escapeHtml(c.detail || "")}</div></div>`
+        );
+      });
+      (n.confirmDates || []).forEach((c) => {
+        rows.push(
+          `<div class="item"><strong>Confirm date · ${escapeHtml(c.title || c.assessmentId)}</strong>` +
+            `<div class="meta">${escapeHtml(c.proposedDate || "unknown")} · ${escapeHtml(c.source || "")}</div>` +
+            `<button type="button" class="tiny digest-action" data-type="confirmDate" data-ref="${escapeHtml(
+              JSON.stringify({ assessmentId: c.assessmentId, date: c.proposedDate })
+            )}">confirm</button></div>`
+        );
+      });
+      (n.coverageGaps || []).forEach((c) => {
+        rows.push(
+          `<div class="item"><strong>Coverage</strong><div class="meta">${escapeHtml(c.note)}</div></div>`
+        );
+      });
+      root.innerHTML = rows.length
+        ? rows.join("")
+        : `<div class="empty">Nothing needs a look</div>`;
+    }
+
+    function renderTriage(digest) {
+      const panel = document.querySelector("#triage-panel");
+      const list = document.querySelector("#triage-list");
+      if (!panel || !list) return;
+      const detail = detailOf(digest);
+      const rows = detail.triage;
+      const available = Boolean(digest?.glance?.triageAvailable && Array.isArray(rows));
+      panel.hidden = !available;
+      if (!available) {
+        list.innerHTML = "";
+        return;
+      }
+      list.innerHTML = rows.length
+        ? rows
+            .map((row) => {
+              const meta = [
+                row.kind,
+                row.overdue ? "overdue" : null,
+                row.dueAt ? String(row.dueAt).slice(0, 10) : null,
+                row.domain || null
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              const doneBtn =
+                row.kind === "task" || row.kind === "import" || row.kind === "deadline"
+                  ? `<button type="button" class="tiny digest-action" data-type="markDone" data-ref="${escapeHtml(
+                      JSON.stringify({ itemId: row.id, taskId: row.id })
+                    )}">done</button>`
+                  : "";
+              return (
+                `<div class="item"><strong>${escapeHtml(row.title)}</strong>` +
+                `<div class="meta">${escapeHtml(meta)}</div>${doneBtn}</div>`
+              );
+            })
+            .join("")
+        : `<div class="empty">Nothing to triage</div>`;
+    }
+
     async function loadDigest() {
       const digest = await Shelf.data.get("digest");
+      digestCache = digest;
+      const detail = detailOf(digest);
       if (!digest) {
         document.querySelector("#status").textContent = "No digest synced yet";
-        renderItems("#today", [], null, "Nothing for today yet");
+        renderGlance(null);
+        renderToday([]);
         renderItems("#watching", [], null, "Nothing you’re skipping");
         renderItems("#reading", [], null, "No reading links");
         renderItems("#junk", [], null, "No junk actions");
+        renderNeedsALook({});
+        renderTriage(null);
         return;
       }
 
-      renderItems("#today", digest.today || [], (item) => {
-        const when = item.dueAt || item.start ||
-          (item.month && item.day ? `${item.month}/${item.day}` : "");
-        const domain = item.domain ? ` · ${item.domain}` : "";
-        const source = item.source ? ` · ${item.source}` : "";
-        return `
-        <div class="item">
-          <strong>${escapeHtml(item.kind)}${escapeHtml(domain)} · ${escapeHtml(item.title || item.name)}</strong>
-          <div class="meta">${escapeHtml(when)}${escapeHtml(source)}${item.why ? ` · ${escapeHtml(item.why)}` : ""}</div>
-          ${actionButtons(item.actions)}
-        </div>`;
-      }, "Nothing for today yet");
+      renderGlance(digest);
+      renderToday(detail.today || []);
 
-      renderItems("#watching", digest.watching || [], (item) => {
+      renderItems("#watching", detail.watching || [], (item) => {
         const when = item.start || "";
         return `
         <div class="item">
-          <strong>not going · ${escapeHtml(item.title || item.name)}</strong>
+          <strong>${domainPill(item.domain)}not going · ${escapeHtml(item.title || item.name)}</strong>
           <div class="meta">${escapeHtml(when)}${item.source ? ` · ${escapeHtml(item.source)}` : ""} · still on your radar</div>
         </div>`;
       }, "Nothing you’re skipping");
 
-      renderItems("#reading", digest.reading || [], (item) => `
+      renderItems("#reading", detail.reading || [], (item) => `
         <div class="item">
           <a href="${escapeHtml(item.url)}" rel="noreferrer">${escapeHtml(item.title || item.url)}</a>
           <div class="meta">${escapeHtml(item.source)} · rank ${escapeHtml(item.rank)}</div>
         </div>`, "No reading links");
 
-      renderItems("#junk", digest.junk || [], (item) => `
+      renderItems("#junk", detail.junk || [], (item) => `
         <div class="item">
           <strong>${escapeHtml(item.action)}</strong>
           <div class="meta">${escapeHtml(item.status || "pending")}</div>
@@ -253,18 +632,76 @@
           }
         </div>`, "No junk actions");
 
+      renderNeedsALook(detail);
+      renderTriage(digest);
+      renderLearned(digest.learned?.rules || []);
+
+      const counts = DOMAIN_ORDER.map((d) => {
+        const n = (detail.today || []).filter((row) => normalizeDomain(row.domain) === d).length;
+        return n ? `${n} ${d}` : null;
+      }).filter(Boolean);
+      const g = glanceOf(digest);
       document.querySelector("#status").textContent =
-        `Updated ${digest.generatedAt || "now"} · as of ${digest.asOfDate || "—"} · ` +
-        `${(digest.today || []).length} today · ` +
-        `${(digest.watching || []).length} watching · ` +
-        `${(digest.reading || []).length} reading · ` +
-        `${(digest.junk || []).length} junk`;
+        `Updated ${digest.generatedAt || "now"} · as of ${digest.date || digest.asOfDate || "—"} · ` +
+        (g.clearDay ? "clear · " : "") +
+        (g.heavyDay ? "heavy · " : "") +
+        `${(detail.today || []).length} today` +
+        (counts.length ? ` (${counts.join(", ")})` : "") +
+        ` · ${(detail.watching || []).length} watching · ` +
+        `${(detail.reading || []).length} reading · ` +
+        `${(detail.junk || []).length} junk` +
+        (digest.learned?.digestActive != null
+          ? ` · ${digest.learned.digestActive} learned`
+          : "") +
+        connectorsLine(digest.connectorsLastRun);
     }
+
+    document.querySelector("#domain-bar").addEventListener("click", (event) => {
+      const chip = event.target.closest(".domain-chip");
+      if (!chip) return;
+      domainFilter = chip.dataset.domain || "all";
+      document.querySelectorAll("#domain-bar .domain-chip").forEach((el) => {
+        el.classList.toggle("on", el === chip);
+      });
+      renderToday(detailOf(digestCache)?.today || []);
+    });
 
     document.querySelector("#refresh").addEventListener("click", () => {
       loadDigest().catch((error) => {
         document.querySelector("#status").textContent = error.message;
       });
+    });
+
+    document.querySelector("#triage-request").addEventListener("click", async () => {
+      const status = document.querySelector("#status");
+      try {
+        await Shelf.outbox.push({
+          id: actionId("digest:triage"),
+          type: "action.triage",
+          source: "digest",
+          collectedAt: new Date().toISOString(),
+          data: {}
+        });
+        await loadDigest();
+      } catch (error) {
+        status.textContent = error.message || String(error);
+      }
+    });
+
+    document.querySelector("#triage-ack").addEventListener("click", async () => {
+      const status = document.querySelector("#status");
+      try {
+        await Shelf.outbox.push({
+          id: actionId("digest:triage-ack"),
+          type: "action.triage.ack",
+          source: "digest",
+          collectedAt: new Date().toISOString(),
+          data: {}
+        });
+        await loadDigest();
+      } catch (error) {
+        status.textContent = error.message || String(error);
+      }
     });
 
     document.querySelector("#ai-propose").addEventListener("click", async () => {
@@ -288,7 +725,66 @@
       }
     });
 
-    document.querySelector(".grid").addEventListener("click", async (event) => {
+    document.querySelector(".app").addEventListener("click", async (event) => {
+      const learnBtn = event.target.closest(".learn-action");
+      if (learnBtn) {
+        event.preventDefault();
+        if (!Shelf.learned || typeof Shelf.learned.upsert !== "function") {
+          document.querySelector("#status").textContent = "Learned API not available";
+          return;
+        }
+        const kind = learnBtn.dataset.learn;
+        try {
+          if (kind === "mute-sender" && learnBtn.dataset.from) {
+            await Shelf.learned.upsert({
+              scope: "digest",
+              matchKind: "sender",
+              matchKey: String(learnBtn.dataset.from).toLowerCase(),
+              effect: "mute",
+              effectValue: {},
+              source: "manual"
+            });
+          } else if (kind === "mute-group" && learnBtn.dataset.group) {
+            await Shelf.learned.upsert({
+              scope: "digest",
+              matchKind: "group_id",
+              matchKey: String(learnBtn.dataset.group),
+              effect: "force_kind",
+              effectValue: { kind: "drop" },
+              source: "manual"
+            });
+          } else if (kind === "mute-cal" && learnBtn.dataset.cal) {
+            await Shelf.learned.upsert({
+              scope: "digest",
+              matchKind: "calendar_id",
+              matchKey: String(learnBtn.dataset.cal),
+              effect: "force_kind",
+              effectValue: { kind: "drop" },
+              source: "manual"
+            });
+          } else if (kind === "always-school" && learnBtn.dataset.from) {
+            const from = String(learnBtn.dataset.from);
+            const at = from.lastIndexOf("@");
+            const domain = at >= 0 ? from.slice(at + 1).toLowerCase() : "";
+            if (!domain) {
+              document.querySelector("#status").textContent = "No email domain to learn";
+              return;
+            }
+            await Shelf.learned.upsert({
+              scope: "digest",
+              matchKind: "from_domain",
+              matchKey: domain,
+              effect: "set_domain",
+              effectValue: { domain: "school" },
+              source: "manual"
+            });
+          }
+          await loadDigest();
+        } catch (error) {
+          document.querySelector("#status").textContent = error.message || String(error);
+        }
+        return;
+      }
       const button = event.target.closest(".digest-action");
       if (!button) return;
       const type = button.dataset.type;
@@ -298,19 +794,65 @@
       } catch (_error) {
         targetRef = {};
       }
+      // calendar.add / import.statement links navigate/download; still record the action.
+      if (button.tagName === "A" && type === "import.statement") {
+        return;
+      }
+      if (button.tagName === "A" && type === "calendar.add") {
+        // Let the browser download the .ics; also queue hub ack.
+        try {
+          await Shelf.outbox.push({
+            id: actionId(`digest:${type}`),
+            type: "action.calendar.add",
+            source: "digest",
+            collectedAt: new Date().toISOString(),
+            data: { targetRef }
+          });
+        } catch (_error) {
+          /* download still proceeds */
+        }
+        return;
+      }
       button.disabled = true;
       try {
+        const typeName = type.startsWith("action.") ? type : `action.${type}`;
+        const payload = { targetRef };
+        if (type === "confirmDate" || typeName === "action.confirmDate") {
+          payload.assessmentId = targetRef.assessmentId;
+          payload.date = targetRef.date || null;
+        }
+        if (type === "markDone" || typeName === "action.markDone") {
+          payload.taskId = targetRef.itemId || targetRef.taskId;
+        }
+        if (type === "markReviewed" || typeName === "action.markReviewed") {
+          payload.topicId = targetRef.topicId;
+        }
         await Shelf.outbox.push({
           id: actionId(`digest:${type}`),
-          type: type.startsWith("action.") ? type : `action.${type}`,
+          type: typeName,
           source: "digest",
           collectedAt: new Date().toISOString(),
-          data: { targetRef }
+          data: payload
         });
         await loadDigest();
       } catch (error) {
         document.querySelector("#status").textContent = error.message || String(error);
         button.disabled = false;
+      }
+    });
+
+    document.querySelector("#learned").addEventListener("click", async (event) => {
+      const button = event.target.closest(".learned-undo");
+      if (!button) return;
+      if (!Shelf.learned || typeof Shelf.learned.deactivate !== "function") {
+        document.querySelector("#status").textContent = "Learned API not available";
+        return;
+      }
+      try {
+        await Shelf.learned.deactivate(button.dataset.id);
+        await loadDigest();
+      } catch (error) {
+        document.querySelector("#status").textContent = error.message || String(error);
       }
     });
 

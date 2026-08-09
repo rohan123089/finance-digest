@@ -34,7 +34,8 @@ const MIME = {
   ".md": "text/markdown; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
-  ".ico": "image/x-icon"
+  ".ico": "image/x-icon",
+  ".webmanifest": "application/manifest+json; charset=utf-8"
 };
 
 function sendJson(res, status, body) {
@@ -98,7 +99,9 @@ function serveStatic(req, res, urlPath) {
     "/home": "/apps/app.html",
     "/apps/hub/home.html": "/apps/app.html",
     "/app": "/apps/app.html",
-    "/app.html": "/apps/app.html"
+    "/app.html": "/apps/app.html",
+    "/screens": "/apps/hub/screens.html",
+    "/apps/hub/screens": "/apps/hub/screens.html"
   };
   if (aliases[urlPath]) {
     res.writeHead(302, {
@@ -179,7 +182,8 @@ function createServer(db, options = {}) {
             hubPort: PORT,
             lanBound: doorway.lanBound,
             phoneUrl: doorway.preferredUrl,
-            phoneUrls: doorway.urls
+            phoneUrls: doorway.urls,
+            simplefinAutoSync: simplefin.readAutoSyncStatus(db)
           });
         }
 
@@ -197,12 +201,37 @@ function createServer(db, options = {}) {
             changed: rows.length,
             asOfDate: settings.asOfDate,
             settings: {
-              weeklySavingsTarget: settings.weeklySavingsTarget
+              weeklySavingsTarget: settings.weeklySavingsTarget,
+              checkingReserve: settings.checkingReserve,
+              incomeStreamOverrides: settings.incomeStreamOverrides || {},
+              budgetEnvelopes: settings.budgetEnvelopes || {},
+              declinedEnvelopeCategories:
+                settings.declinedEnvelopeCategories || []
             },
             accounts: dbApi.listAccounts(db),
             cursor: cursors.txCursor,
             txCount: cursors.txCount,
             settingsStamp: cursors.settingsStamp
+          });
+        }
+
+        if (req.method === "POST" && pathname === "/api/transactions/recategorize") {
+          const body = await readBody(req).catch(() => ({}));
+          const result = dbApi.recategorizeTransactions(db, {
+            force: Boolean(body?.force)
+          });
+          return sendJson(res, 200, {
+            ok: true,
+            updated: result.updated,
+            byCategory: result.byCategory,
+            version: result.version,
+            snapshot: result.snapshot,
+            rewards: rewardsEngine.optimize(
+              dbApi.listTransactions(db),
+              dbApi.listRewardsRules(db),
+              dbApi.listRewardsOffers(db),
+              { asOfDate: dbApi.getSettings(db).asOfDate }
+            )
           });
         }
 
@@ -289,6 +318,40 @@ function createServer(db, options = {}) {
           dbApi.deleteBill(db, id);
           await sync.publishDown(db, projectRoot, syncRoot);
           return sendJson(res, 200, { ok: true });
+        }
+
+        if (req.method === "POST" && pathname === "/api/bills/from-suggestion") {
+          const body = await readBody(req);
+          const bill = dbApi.promoteBillFromSuggestion(db, body);
+          await sync.publishDown(db, projectRoot, syncRoot);
+          return sendJson(res, 200, {
+            ok: true,
+            bill,
+            snapshot: dbApi.redactSnapshot(dbApi.computeLiveSnapshot(db))
+          });
+        }
+
+        if (req.method === "GET" && pathname === "/api/learned") {
+          const scope = url.searchParams.get("scope") || "";
+          return sendJson(res, 200, {
+            kind: "learned",
+            rules: dbApi.listLearnedRules(db, scope || undefined)
+          });
+        }
+
+        if (req.method === "POST" && pathname === "/api/learned") {
+          const body = await readBody(req);
+          const rule = dbApi.upsertLearnedRule(db, body);
+          return sendJson(res, 200, { ok: true, rule });
+        }
+
+        if (
+          req.method === "DELETE" &&
+          pathname.startsWith("/api/learned/")
+        ) {
+          const id = decodeURIComponent(pathname.slice("/api/learned/".length));
+          const rule = dbApi.deactivateLearnedRule(db, id);
+          return sendJson(res, 200, { ok: true, rule });
         }
 
         if (req.method === "POST" && pathname === "/api/import") {
@@ -495,6 +558,27 @@ function createServer(db, options = {}) {
           }
         }
 
+        if (req.method === "GET" && pathname === "/api/gcal/status") {
+          const gcal = require("./connectors/gcal.js");
+          return sendJson(res, 200, await gcal.getStatus());
+        }
+
+        if (req.method === "POST" && pathname === "/api/gcal/test") {
+          try {
+            const result = await connectors.runGcal(db, { forceMock: false });
+            await sync.publishDown(db, projectRoot, syncRoot);
+            return sendJson(res, 200, {
+              ok: true,
+              mode: result.mode,
+              emitted: Array.isArray(result.emitted) ? result.emitted.length : 0,
+              byAccount: result.byAccount || {},
+              error: result.error || null
+            });
+          } catch (error) {
+            return sendJson(res, 502, { error: error.message || String(error) });
+          }
+        }
+
         if (req.method === "POST" && pathname === "/api/gmail/disconnect") {
           const body = await readBody(req).catch(() => ({}));
           if (body?.slot != null) {
@@ -639,11 +723,13 @@ function createServer(db, options = {}) {
           const cursors = dbApi.getDataCursors(db);
           const txCursor = url.searchParams.get("txCursor") || "";
           const settingsStamp = url.searchParams.get("settingsStamp") || "";
+          const engineVersion = url.searchParams.get("engineVersion") || "";
           const asOfDate = url.searchParams.get("asOfDate") || "";
           if (
             txCursor &&
             txCursor === cursors.txCursor &&
             settingsStamp === cursors.settingsStamp &&
+            engineVersion === cursors.engineVersion &&
             (!asOfDate || asOfDate === cursors.asOfDate)
           ) {
             return sendJson(res, 200, {
@@ -705,12 +791,11 @@ function createServer(db, options = {}) {
           return sendJson(res, 200, {
             processed,
             kind: "digest",
-            today: digest.today,
-            watching: digest.watching || [],
-            reading: digest.reading,
-            junk: digest.junk,
+            date: digest.date || digest.asOfDate,
+            asOfDate: digest.asOfDate,
             generatedAt: digest.generatedAt,
-            asOfDate: digest.asOfDate
+            glance: digest.glance,
+            detail: digest.detail
           });
         }
 
@@ -775,15 +860,32 @@ function createServer(db, options = {}) {
             });
           }
           const digest = sync.buildDigest(db);
+          let connectorsLastRun = null;
+          try {
+            connectorsLastRun = JSON.parse(
+              dbApi.getMeta(db, "lastConnectorsRun", "null")
+            );
+          } catch (_error) {
+            connectorsLastRun = null;
+          }
+          const learnedDigest = dbApi.listLearnedRules(db, "digest").filter(
+            (r) =>
+              r.active ||
+              (r.evidence && Number(r.evidence.threshold) > 1)
+          );
           return sendJson(res, 200, {
             kind: "digest",
             unchanged: false,
-            today: digest.today,
-            watching: digest.watching || [],
-            reading: digest.reading,
-            junk: digest.junk,
-            generatedAt: digest.generatedAt,
+            date: digest.date || digest.asOfDate,
             asOfDate: digest.asOfDate,
+            generatedAt: digest.generatedAt,
+            glance: digest.glance,
+            detail: digest.detail,
+            connectorsLastRun,
+            learned: {
+              digestActive: learnedDigest.length,
+              rules: learnedDigest.slice(0, 40)
+            },
             cursor: cursors
           });
         }
@@ -795,11 +897,13 @@ function createServer(db, options = {}) {
           const forceMock = body.forceMock === true;
           const result = await connectors.runAll(db, { forceMock });
           await sync.publishDown(db, projectRoot, syncRoot);
-          return sendJson(res, 200, {
+          const summary = {
+            at: new Date().toISOString(),
             forceMock,
             groupme: {
               mode: result.groupme.mode,
-              emitted: result.groupme.emitted.length
+              emitted: result.groupme.emitted.length,
+              error: result.groupme.error || null
             },
             sms: {
               mode: result.sms.mode,
@@ -807,7 +911,8 @@ function createServer(db, options = {}) {
             },
             email: {
               mode: result.email.mode,
-              emitted: result.email.emitted.length
+              emitted: result.email.emitted.length,
+              error: result.email.error || null
             },
             bank: {
               mode: result.bank.mode,
@@ -817,6 +922,14 @@ function createServer(db, options = {}) {
               mode: result.canvas.mode,
               emitted: result.canvas.emitted.length,
               error: result.canvas.error || null
+            },
+            gcal: {
+              mode: result.gcal.mode,
+              emitted: Array.isArray(result.gcal.emitted)
+                ? result.gcal.emitted.length
+                : 0,
+              error: result.gcal.error || null,
+              byAccount: result.gcal.byAccount || null
             },
             simplefin: {
               mode: result.simplefin.mode,
@@ -829,7 +942,9 @@ function createServer(db, options = {}) {
               amexStatus: result.rewards.amexStatus,
               error: result.rewards.error || null
             }
-          });
+          };
+          dbApi.setMeta(db, "lastConnectorsRun", JSON.stringify(summary));
+          return sendJson(res, 200, summary);
         }
 
         if (req.method === "GET" && pathname === "/api/rewards") {
@@ -979,8 +1094,25 @@ async function main() {
   const dbPath = process.env.HUB_DB_PATH || dbApi.DEFAULT_DB_PATH;
   const encryptionKey = await secretStore.getOrCreateDatabaseKey(dbPath);
   const db = dbApi.openDatabase({ dbPath, encryptionKey });
+  const recat = dbApi.maybeRecategorizeOnBoot(db);
+  if (!recat.skipped) {
+    console.log(
+      `Offline categories refreshed: ${recat.updated} row(s) (rules v${recat.version})`
+    );
+  }
+  if (recat.directionHeal && !recat.directionHeal.skipped) {
+    console.log(
+      `Direction heal: ${recat.directionHeal.updated || 0} blank row(s) fixed`
+    );
+  }
+  if (recat.p2pHeal && !recat.p2pHeal.skipped) {
+    console.log(
+      `P2P learn exception: deactivated ${recat.p2pHeal.deactivated || 0} Venmo/Zelle category rule(s)`
+    );
+  }
   sync.ensureSyncLayout(SYNC_ROOT);
   const server = createServer(db);
+  let simplefinPoller = null;
   server.listen(PORT, HOST, () => {
     console.log(`Finance hub listening on http://${HOST}:${PORT}`);
     console.log(`App: http://127.0.0.1:${PORT}/apps/app.html`);
@@ -1002,9 +1134,22 @@ async function main() {
     console.log(`GroupMe:    http://127.0.0.1:${PORT}/apps/hub/groupme.html`);
     console.log(`Encrypted DB key: ${secretStore.SERVICE} in the OS keychain`);
     console.log(`Sync folder: ${SYNC_ROOT}`);
+
+    simplefinPoller = simplefin.startAutoSync(db, {
+      onResult: async () => {
+        await sync.publishDown(db, ROOT, SYNC_ROOT);
+      }
+    });
+    if (simplefinPoller.enabled) {
+      const mins = Math.round(simplefinPoller.intervalMs / 60000);
+      console.log(`SimpleFIN auto-sync: every ${mins}m (set HUB_SIMPLEFIN_POLL_MS to change)`);
+    } else {
+      console.log("SimpleFIN auto-sync: off");
+    }
   });
 
   const shutdown = () => {
+    if (simplefinPoller?.stop) simplefinPoller.stop();
     server.close(() => {
       db.close();
       process.exit(0);

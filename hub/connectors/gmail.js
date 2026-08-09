@@ -9,6 +9,9 @@ const crypto = require("node:crypto");
 const secretStore = require("../secret-store.js");
 
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+/** Gmail + Calendar read — re-consent once so Calendar can pull into Digest. */
+const GOOGLE_SCOPES = `${GMAIL_SCOPE} ${CALENDAR_SCOPE}`;
 const STATE_TTL_MS = 15 * 60 * 1000;
 const MAX_ACCOUNTS = 3;
 
@@ -141,7 +144,8 @@ async function getStatus() {
     email: primary?.email || null,
     accounts,
     redirectUri: redirectUri("127.0.0.1", process.env.HUB_PORT || 8787),
-    scope: GMAIL_SCOPE
+    scope: GOOGLE_SCOPES,
+    scopes: { gmail: GMAIL_SCOPE, calendar: CALENDAR_SCOPE }
   };
 }
 
@@ -177,7 +181,7 @@ async function buildAuthUrl(options = {}) {
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", redirectUri(host, port));
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", GMAIL_SCOPE);
+  url.searchParams.set("scope", GOOGLE_SCOPES);
   url.searchParams.set("access_type", "offline");
   // Force account picker so slot 2/3 can be a different Google login.
   url.searchParams.set("prompt", "select_account consent");
@@ -312,6 +316,8 @@ async function disconnect(options = {}) {
 
 module.exports = {
   GMAIL_SCOPE,
+  CALENDAR_SCOPE,
+  GOOGLE_SCOPES,
   MAX_ACCOUNTS,
   redirectUri,
   normalizeSlot,

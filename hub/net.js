@@ -6,8 +6,35 @@
  */
 
 const secretStore = require("./secret-store.js");
+const syllabus = require("../engine/syllabus.js");
 
 const URL_RE = /https?:\/\/[^\s<>"')]+/gi;
+
+function decodeGmailBodyData(data) {
+  if (!data) return "";
+  try {
+    const normalized = String(data).replace(/-/g, "+").replace(/_/g, "/");
+    return Buffer.from(normalized, "base64").toString("utf8");
+  } catch (_error) {
+    return "";
+  }
+}
+
+function collectGmailTextParts(payload, out = { body: "", attachments: [] }) {
+  if (!payload) return out;
+  const mime = String(payload.mimeType || "").toLowerCase();
+  const filename = payload.filename || "";
+  if (payload.body?.data) {
+    const text = decodeGmailBodyData(payload.body.data);
+    if (mime === "text/plain" || mime === "text/html") {
+      out.body += (out.body ? "\n" : "") + text.replace(/<[^>]+>/g, " ");
+    } else if (filename && /\.(txt|md|csv)$/i.test(filename)) {
+      out.attachments.push(text);
+    }
+  }
+  (payload.parts || []).forEach((part) => collectGmailTextParts(part, out));
+  return out;
+}
 
 async function call(service, request = {}) {
   if (service === "groupme") {
@@ -31,10 +58,12 @@ async function call(service, request = {}) {
       );
     }
 
-    const maxResults = Number(request.maxResults) || 15;
+    const maxResults = Number(request.maxResults) || 25;
+    // Broad inbox pull — life.extractFromMessage decides what becomes Digest work.
+    // Old query required keyword hits and silently dropped most actionable mail.
     const query =
       request.query ||
-      "newer_than:21d (statement OR e-statement OR due OR deadline OR assignment OR meeting OR reminder OR \"action required\" OR rsvp OR has:link)";
+      "newer_than:21d in:inbox -category:promotions -category:social -category:forums";
     const slotFilter = request.slot != null ? Number(request.slot) : null;
     const selected =
       slotFilter != null ? accounts.filter((a) => a.slot === slotFilter) : accounts;
@@ -108,6 +137,31 @@ async function call(service, request = {}) {
           ? new Date(Number(detail.internalDate)).toISOString()
           : new Date().toISOString();
         const stableId = `${account.slot}:${message.id}`;
+
+        let body = "";
+        let attachmentTexts = [];
+        if (syllabus.looksLikeSyllabusEmail(subject, snippet)) {
+          try {
+            const fullRes = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(message.id)}?format=full`,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  Accept: "application/json"
+                }
+              }
+            );
+            if (fullRes.ok) {
+              const full = await fullRes.json();
+              const parts = collectGmailTextParts(full.payload);
+              body = parts.body || "";
+              attachmentTexts = parts.attachments || [];
+            }
+          } catch (_error) {
+            // Fall back to snippet-only.
+          }
+        }
+
         messages.push({
           id: stableId,
           gmailId: message.id,
@@ -115,13 +169,15 @@ async function call(service, request = {}) {
           mailbox: account.address || null,
           subject,
           snippet,
+          body: body || undefined,
+          attachmentTexts: attachmentTexts.length ? attachmentTexts : undefined,
           from,
           sharedBy: account.address || "email",
           receivedAt,
           source: "email"
         });
         count += 1;
-        const found = `${subject}\n${snippet}`.match(URL_RE) || [];
+        const found = `${subject}\n${snippet}\n${body}`.match(URL_RE) || [];
         found.forEach((rawUrl, index) => {
           const cleaned = rawUrl.replace(/[.,;:]+$/, "");
           links.push({

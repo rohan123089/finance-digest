@@ -68,11 +68,11 @@ async function main() {
 
   const digest = sync.buildDigest(db);
   assert.ok(
-    digest.today.some((row) => row.kind === "bill" && /Rent/i.test(row.title)),
+    digest.detail.today.some((row) => row.kind === "bill" && /Rent/i.test(row.title)),
     "rent reminder should appear in digest Today"
   );
 
-  const billRow = digest.today.find((row) => row.kind === "bill");
+  const billRow = digest.detail.today.find((row) => row.kind === "bill");
   dbApi.upsertSyncItem(db, {
     id: "act:bill-paid",
     type: "action.bill.paid",
@@ -82,7 +82,7 @@ async function main() {
   });
   sync.executePendingActions(db);
   const after = sync.buildDigest(db);
-  assert.ok(!after.today.some((row) => row.id === billRow.id));
+  assert.ok(!after.detail.today.some((row) => row.id === billRow.id));
 
   db.close();
   console.log("Standing bills schedule + digest reminders passed.");

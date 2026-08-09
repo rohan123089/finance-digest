@@ -61,8 +61,15 @@ with `{ "kind": "snapshot" }`. It has no raw transactions or account numbers.
 `Shelf.data.get('digest')` resolves to:
 
 ```json
-{ "kind": "digest", "today": [], "reading": [], "junk": [] }
+{
+  "kind": "digest",
+  "date": "2026-08-07",
+  "glance": { "clearDay", "heavyDay", "anchor", "examHorizon", "today", "backlog", "studyNext", "junk", "reading" },
+  "detail": { "today": [], "watching": [], "backlog": [], "reading": [], "junk": [], "needsALook": {} }
+}
 ```
+
+Morning glance binds to `glance`; the Detail page binds to `detail`.
 
 The deterministic rules and authoritative snapshot computation run in the hub.
 The offline mock invokes the shared engine only as a browser fixture.

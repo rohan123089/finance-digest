@@ -14,6 +14,21 @@ hub data. Opening a downloaded `file://` copy is preview-only.
 
 ## Run
 
+**Easiest (Windows):** build/install the desktop app once, then pin it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\desktop-app\build.ps1
+powershell -ExecutionPolicy Bypass -File .\Install-Hub-Shortcut.ps1
+```
+
+That creates **FinanceHub.exe** (WebView2 shell — pins as its own app, not Edge)
+and a Desktop / Start Menu **Finance Hub** shortcut. Open it, then pin the
+running taskbar icon.
+
+`Start-Hub.cmd` also launches `FinanceHub.exe` when present.
+
+Or from a terminal:
+
 ```powershell
 npm install
 npm start
@@ -237,8 +252,11 @@ npm run connectors:once
 # then open http://127.0.0.1:8787/apps/digest/digest.html → Refresh
 ```
 
-Live Gmail uses the same rules on subject + snippet. This is not full Google Calendar
-sync yet — it surfaces work into the digest and queues calendar-add for the device.
+Live Gmail uses the same rules on subject + snippet. **Add to calendar** downloads a
+`.ics` file from the hub (`GET /api/calendar/ics?itemId=…`) so any calendar app can
+import it — this is not live Google Calendar sync.
+LAN `POST /api/outbox` expands raw `signal.sms` / `signal.chat` the same way encrypted
+file ingest does.
 ## M5 gated AI
 
 AI is optional and hub-gated (`OFF` / `LOCAL` / `CLOUD`). It may only see a
@@ -299,8 +317,8 @@ Canvas base URL + a personal access token (Account → Settings → New Access T
 Assignments and upcoming events land in Digest as school tasks.
 
 GroupMe: open <http://127.0.0.1:8787/apps/hub/groupme.html>, paste an access token
-from [dev.groupme.com](https://dev.groupme.com/), load your groups (or paste a
-group id), then **Test pull**. Chat plans land in Digest.
+from [dev.groupme.com](https://dev.groupme.com/), load your groups, select one or more,
+then **Test pull**. Chat plans land in Digest.
 
 Still **live-or-skip by default** (`npm run connectors:once`). Mock data is
 opt-in only (`HUB_CONNECTORS_MOCK=1` or `{ "forceMock": true }`) and should not

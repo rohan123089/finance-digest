@@ -19,6 +19,7 @@ function read(rel) {
 const hubShelf = read("apps/shelf/hub-shelf.js");
 const mockShelf = read("apps/shelf/mock-shelf.js");
 const rules = read("engine/rules.js");
+const budget = read("engine/budget.js");
 const model = read("engine/model.js");
 const bills = read("engine/bills.js");
 
@@ -155,6 +156,8 @@ const html = `<!doctype html>
         <button type="button" data-tab="sync">Sync</button>
       </div>
       <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--blue);font-size:13px;text-decoration:none">Setup</a>
+      <a id="full-money-link" href="/apps/money/money.html" style="color:var(--accent);font-size:13px;text-decoration:none">Full Money</a>
+      <a id="full-digest-link" href="/apps/digest/digest.html" style="color:var(--accent);font-size:13px;text-decoration:none">Full Digest</a>
       <div class="bridge" id="bridge">Starting…</div>
       <div class="bridge" id="load-progress" hidden></div>
     </div>
@@ -164,7 +167,7 @@ const html = `<!doctype html>
     <!-- MONEY -->
     <section class="panel on" id="tab-money">
       <div class="hero">
-        <div class="eyebrow" id="safe-label">Safe to spend</div>
+        <div class="eyebrow" id="safe-label">Safe to spend this week</div>
         <div class="safe" id="safe-value">—</div>
         <div class="muted" id="safe-detail">Load from Shelf…</div>
       </div>
@@ -188,6 +191,10 @@ const html = `<!doctype html>
       <h2 style="margin-top:18px">Transactions <span class="muted" id="review-count"></span></h2>
       <div id="tx-list" class="muted">—</div>
       <p class="status" id="money-status"></p>
+      <p class="muted" style="margin-top:14px">
+        Laptop full Money review (categories, Amex/Discover, UWCU PDF/CSV import, rewards):
+        <a href="/apps/money/money.html">Open full Money page</a>
+      </p>
     </section>
 
     <!-- DIGEST -->
@@ -203,6 +210,10 @@ const html = `<!doctype html>
         <div class="digest-box"><h3>Junk</h3><div id="junk"></div></div>
       </div>
       <p class="status" id="digest-status">—</p>
+      <p class="muted" style="margin-top:14px">
+        Laptop full Digest (Today with Personal/School filters, Watching, Reading, Junk, AI nudges):
+        <a href="/apps/digest/digest.html">Open full Digest page</a>
+      </p>
     </section>
 
     <!-- SYNC (Shelf = doorway only; hub owns data) -->
@@ -429,15 +440,20 @@ ${hubShelf}
       safeToSpend: {
         period: safe.period,
         periodSource: safe.periodSource,
+        fundingMode: safe.fundingMode,
         nextPayday: safe.nextPayday,
         horizonDays: safe.horizonDays,
-        amount: safe.amount,
+        allocationWeeks: safe.allocationWeeks,
+        horizonSource: safe.horizonSource,
+        amount: safe.amount ?? safe.remaining,
         income: safe.income,
         weeklyIncome: safe.weeklyIncome,
         committed: safe.committed,
         savingsTarget: safe.savingsTarget,
+        savingsRemaining: safe.savingsRemaining,
         spent: safe.spent,
-        remaining: safe.remaining
+        remaining: safe.remaining,
+        breakdown: safe.breakdown || null
       }
     };
   }
@@ -458,16 +474,16 @@ ${hubShelf}
     }
     const safe = snap.safeToSpend || {};
     const el = document.querySelector("#safe-value");
-    el.textContent = money.format(safe.remaining || 0);
+    el.textContent = money.format(safe.amount || 0);
     el.classList.toggle("neg", (safe.remaining || 0) < 0);
-    document.querySelector("#safe-label").textContent = safe.nextPayday
-      ? "Safe to spend until " + safe.nextPayday
-      : "Safe to spend";
+    document.querySelector("#safe-label").textContent =
+      "Safe to spend this week · after saving";
+    const bd = safe.breakdown || {};
     document.querySelector("#safe-detail").textContent =
-      money.format(safe.income ?? safe.weeklyIncome ?? 0) + " in − " +
-      money.format(safe.committed || 0) + " committed − " +
-      money.format(safe.savingsTarget || 0) + " savings − " +
-      money.format(safe.spent || 0) + " spent";
+      money2.format(safe.remaining || 0) + " remaining · " +
+      money2.format(bd.periodIncome || safe.income || 0) + " income − " +
+      money2.format(bd.committedBills || safe.committed || 0) + " bills − " +
+      money2.format(bd.savingsTarget || safe.savingsTarget || 0) + " savings";
     document.querySelector("#m-nw").textContent = money.format(snap.netWorth || 0);
     document.querySelector("#m-liq").textContent = money.format(snap.liquid || 0);
     document.querySelector("#m-owed").textContent = money.format(snap.owed || 0);
@@ -514,6 +530,8 @@ ${hubShelf}
       "rsvp.no": "Not going",
       "task.complete": "Done",
       "calendar.add": "Calendar",
+      "budget.ratchet.accept": "Save more",
+      snooze: "Snooze",
       dismiss: "Dismiss",
       ack: "Ack",
       unsubscribe: "Run"
@@ -624,6 +642,7 @@ ${hubShelf}
       ? {
           txCursor: txPayload?.cursor || cache.txCursor || "",
           settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+          engineVersion: cache.engineVersion || "",
           asOfDate: txPayload?.asOfDate || cache.asOfDate || ""
         }
       : {});
@@ -663,6 +682,7 @@ ${hubShelf}
       snapshot: slimSnapshot(snapshot),
       txCursor: txPayload?.cursor || cache.txCursor || "",
       settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+      engineVersion: snap?.cursor?.engineVersion || cache.engineVersion || "",
       asOfDate: txPayload?.asOfDate || cache.asOfDate || "",
       txCount: txPayload?.txCount || rows.length
     });
@@ -996,6 +1016,17 @@ ${hubShelf}
     loadDoorway().catch(() => {});
   });
 
+  // Keep Money hero current while the page stays open.
+  setInterval(() => {
+    if (document.visibilityState === "visible") refreshMoney().catch(() => {});
+  }, 15000);
+  window.addEventListener("focus", () => {
+    refreshMoney().catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refreshMoney().catch(() => {});
+  });
+
   boot().catch((error) => {
     const box = document.querySelector("#boot-error");
     box.hidden = false;
@@ -1009,6 +1040,9 @@ ${hubShelf}
   <!-- Offline engines are not JS-parsed until needed (hub path stays fast). -->
   <script type="text/plain" id="src-rules">
 ${rules}
+  </script>
+  <script type="text/plain" id="src-budget">
+${budget}
   </script>
   <script type="text/plain" id="src-model">
 ${model}
@@ -1025,7 +1059,7 @@ ${mockShelf}
 
     function installOfflineEngines() {
       if (window.__lifeOfflineEngines) return;
-      ["src-rules", "src-model", "src-bills", "src-mock"].forEach((id) => {
+      ["src-rules", "src-budget", "src-model", "src-bills", "src-mock"].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         const code = el.textContent || "";

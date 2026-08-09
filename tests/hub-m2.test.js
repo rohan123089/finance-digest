@@ -111,18 +111,18 @@ async function main() {
   assert.equal(ingested.body.processed.length, 1);
   assert.equal(ingested.body.processed[0].itemCount, 4);
   assert.equal(ingested.body.kind, "digest");
-  assert.ok(ingested.body.today.some((item) => item.kind === "birthday"));
-  assert.ok(ingested.body.reading.some((item) => item.url.includes("example.com")));
-  assert.ok(ingested.body.junk.some((item) => item.action === "unsubscribe"));
+  assert.ok(ingested.body.detail.today.some((item) => item.kind === "birthday"));
+  assert.ok(ingested.body.detail.reading.some((item) => item.url.includes("example.com")));
+  assert.ok(ingested.body.detail.junk.some((item) => item.action === "unsubscribe"));
 
   // Second ingest is a no-op (done marker); still returns assembled digest.
   const again = await request(port, "POST", "/api/sync/ingest");
   assert.equal(again.body.processed.length, 0);
-  assert.equal(again.body.today.length, ingested.body.today.length);
+  assert.equal(again.body.detail.today.length, ingested.body.detail.today.length);
 
   const digest = await request(port, "GET", "/api/digest");
   assert.equal(digest.body.kind, "digest");
-  assert.ok(digest.body.today.some((item) => item.id === "contact:a81f"));
+  assert.ok(digest.body.detail.today.some((item) => item.id === "contact:a81f"));
 
   const action = dbApi.listSyncItems(db).find((item) => item.id === "act:7f10");
   assert.equal(action.executed, true);

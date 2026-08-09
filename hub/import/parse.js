@@ -54,8 +54,17 @@ function parseCsv(text) {
 }
 
 function pickField(row, names) {
+  const keys = Object.keys(row);
   for (const name of names) {
-    const key = Object.keys(row).find((k) => k === name || k.replace(/\s+/g, "") === name);
+    const want = String(name || "")
+      .toLowerCase()
+      .replace(/\s+/g, "");
+    const key = keys.find(
+      (k) =>
+        String(k || "")
+          .toLowerCase()
+          .replace(/\s+/g, "") === want
+    );
     if (key != null && row[key] !== "") return row[key];
   }
   return "";
@@ -110,6 +119,8 @@ function directionHintFromSigned(amount, accountType) {
 function rowsFromCsv(text, accountId, accountType) {
   const { rows } = parseCsv(text);
   const out = [];
+  let endingBalance = null;
+  let endingBalanceDate = "";
   rows.forEach((row, index) => {
     const date = normalizeDate(
       pickField(row, ["date", "trans date", "transaction date", "posted date", "post date"])
@@ -122,10 +133,28 @@ function rowsFromCsv(text, accountId, accountType) {
       "name",
       "memo"
     ]);
-    const amount = parseAmount(
-      pickField(row, ["amount", "amt", "transaction amount", "debit", "credit"])
+    const debit = parseAmount(
+      pickField(row, ["debit", "withdrawal", "withdrawals", "amount debit"])
     );
-    if (!date || !rawMerchant || !Number.isFinite(amount)) return;
+    const credit = parseAmount(
+      pickField(row, ["credit", "deposit", "deposits", "amount credit"])
+    );
+    let amount = parseAmount(
+      pickField(row, ["amount", "amt", "transaction amount"])
+    );
+    if (!Number.isFinite(amount)) {
+      if (Number.isFinite(debit) && debit !== 0) amount = -Math.abs(debit);
+      else if (Number.isFinite(credit) && credit !== 0) amount = Math.abs(credit);
+    }
+    const balance = parseAmount(
+      pickField(row, ["balance", "running balance", "ending balance", "available balance"])
+    );
+    // Newest statement balance wins (UWCU exports are often newest-first).
+    if (Number.isFinite(balance) && date && (!endingBalanceDate || date >= endingBalanceDate)) {
+      endingBalanceDate = date;
+      endingBalance = roundCents(Math.abs(balance));
+    }
+    if (!date || !rawMerchant || !Number.isFinite(amount) || amount === 0) return;
     const bankId = pickField(row, ["id", "transaction id", "reference", "ref"]);
     out.push({
       id: bankId ? `csv:${accountId}:${bankId}` : stableId(accountId, date, rawMerchant, amount, index),
@@ -136,7 +165,13 @@ function rowsFromCsv(text, accountId, accountType) {
       directionHint: directionHintFromSigned(amount, accountType)
     });
   });
+  out.endingBalance = endingBalance;
+  out.endingBalanceDate = endingBalanceDate || null;
   return out;
+}
+
+function roundCents(value) {
+  return Math.round(Number(value) * 100) / 100;
 }
 
 function rowsFromOfx(text, accountId, accountType) {
@@ -199,7 +234,13 @@ function parseImport({ text, accountId, accountType, format }) {
   } else {
     rows = rowsFromCsv(text, accountId, accountType);
   }
-  return { format: resolved, rows };
+  return {
+    format: resolved,
+    rows,
+    endingBalance: Number.isFinite(rows.endingBalance) ? rows.endingBalance : null,
+    endingBalanceDate: rows.endingBalanceDate || null,
+    endingBalancesByAccount: rows.endingBalancesByAccount || null
+  };
 }
 
 module.exports = {

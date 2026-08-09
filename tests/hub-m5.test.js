@@ -91,7 +91,7 @@ async function main() {
   assert.equal(cloud.proposal.mutations.length, 0);
 
   const digest = sync.buildDigest(db);
-  assert.ok(digest.today.some((item) => item.kind === "nudge"));
+  assert.ok(digest.detail.today.some((item) => item.kind === "nudge"));
 
   const server = createServer(db, { projectRoot, syncRoot });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

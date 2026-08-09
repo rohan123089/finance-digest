@@ -100,6 +100,10 @@
       settings: {
         asOfDate: todayIso(),
         weeklySavingsTarget: 300,
+        checkingReserve: 1000,
+        incomeStreamOverrides: {},
+        budgetEnvelopes: {},
+        declinedEnvelopeCategories: [],
         monthlyIncome: 5200,
         weeklyIncome: 1200,
         openingBalances: {
@@ -113,6 +117,12 @@
           savings: "cash",
           vanguard: "investment",
           "outside-payments": "external"
+        },
+        accountLabels: {
+          checking: "Checking",
+          savings: "Savings",
+          vanguard: "Vanguard",
+          "outside-payments": "Outside payments"
         }
       },
       bills: DEFAULT_BILLS.map((b) => ({ ...b })),
@@ -179,7 +189,10 @@
     if (!root.MoneyRules || !root.MoneyModel) {
       throw shelfError("NOT_READY", "Money engine has not loaded");
     }
-    const snapshot = root.MoneyModel.computeSnapshot(liveTransactions(), state.settings);
+    const snapshot = root.MoneyModel.computeSnapshot(liveTransactions(), {
+      ...state.settings,
+      accounts: state.accounts || []
+    });
     return {
       kind: "snapshot",
       netWorth: snapshot.netWorth,
@@ -193,23 +206,37 @@
       expensesThisMonth: snapshot.expensesThisMonth,
       spendingMonth: snapshot.spendingMonth,
       spendingByCategory: snapshot.spendingByCategory,
+      categoryDiagnostics: snapshot.categoryDiagnostics,
       recurring: snapshot.recurring,
       balances: snapshot.balances,
       safeToSpend: {
         period: snapshot.safeToSpend.period,
         periodSource: snapshot.safeToSpend.periodSource,
+        fundingMode: snapshot.safeToSpend.fundingMode,
         nextPayday: snapshot.safeToSpend.nextPayday,
         horizonDays: snapshot.safeToSpend.horizonDays,
-        amount: snapshot.safeToSpend.remaining,
+        allocationWeeks: snapshot.safeToSpend.allocationWeeks,
+        horizonSource: snapshot.safeToSpend.horizonSource,
+        amount: snapshot.safeToSpend.amount,
         income: snapshot.safeToSpend.income,
         weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+        incomeReceived: snapshot.safeToSpend.incomeReceived,
+        incomeExpected: snapshot.safeToSpend.incomeExpected,
         committed: snapshot.safeToSpend.committed,
         commitments: snapshot.safeToSpend.commitments,
+        dueThisWeek: snapshot.safeToSpend.dueThisWeek || [],
         savingsTarget: snapshot.safeToSpend.savingsTarget,
+        savingsNeeded: snapshot.safeToSpend.savingsNeeded,
+        savingsAlready: snapshot.safeToSpend.savingsAlready,
+        savingsRemaining: snapshot.safeToSpend.savingsRemaining,
         spent: snapshot.safeToSpend.spent,
-        remaining: snapshot.safeToSpend.remaining
+        remaining: snapshot.safeToSpend.remaining,
+        cashBackedRemaining: snapshot.safeToSpend.cashBackedRemaining,
+        breakdown: snapshot.safeToSpend.breakdown || null,
+        incomeOutlook: snapshot.safeToSpend.incomeOutlook || [],
+        assumptions: snapshot.safeToSpend.assumptions || []
       },
-      flags: []
+      flags: snapshot.flags || []
     };
   }
 
@@ -270,11 +297,45 @@
       kind: "digest",
       v: 1,
       generatedAt: new Date().toISOString(),
+      date: asOf,
       asOfDate: asOf,
-      today,
-      watching: state.watching || [],
-      reading: state.reading || [],
-      junk: state.junk || []
+      glance: {
+        clearDay: today.length === 0,
+        heavyDay: false,
+        anchor:
+          today.length === 0
+            ? "You're clear today — nothing mandatory on the board."
+            : `${today.length} item${today.length === 1 ? "" : "s"} on the board.`,
+        examHorizon: [],
+        today: today
+          .filter((row) => row.kind === "bill" || row.dueAt)
+          .slice(0, 8)
+          .map((row) => ({
+            id: row.id,
+            time: null,
+            title: row.title || row.name,
+            kind: row.kind === "bill" ? "deadline" : "personal",
+            protected: true,
+            leadDays: null
+          })),
+        backlog: {
+          open: today.filter((r) => r.kind === "task" || r.kind === "bill").length,
+          overdue: today.filter((r) => r.overdue).length
+        },
+        studyNext: null,
+        junk: { count: (state.junk || []).length, targetRef: null },
+        reading: (state.reading || []).map((r) => ({ id: r.id, title: r.title }))
+      },
+      detail: {
+        today,
+        watching: state.watching || [],
+        backlog: today.filter((r) => r.kind === "task" || r.kind === "bill"),
+        reading: state.reading || [],
+        junk: state.junk || [],
+        examHorizon: [],
+        topics: [],
+        needsALook: { conflicts: [], confirmDates: [], coverageGaps: [] }
+      }
     };
   }
 
@@ -285,7 +346,23 @@
       return;
     }
     if (item.type === "action.settings.update" && item.data) {
-      Object.assign(state.settings, item.data);
+      const data = { ...item.data };
+      if (data.incomeStreamOverrides) {
+        const prev = state.settings.incomeStreamOverrides || {};
+        const merged = { ...prev };
+        Object.entries(data.incomeStreamOverrides).forEach(([key, value]) => {
+          const normalizedKey = String(key || "").trim().toLowerCase();
+          if (!normalizedKey) return;
+          if (value == null || value === "" || value.status === "clear") {
+            delete merged[normalizedKey];
+            return;
+          }
+          const status = typeof value === "string" ? value : value.status;
+          if (status) merged[normalizedKey] = { status: String(status) };
+        });
+        data.incomeStreamOverrides = merged;
+      }
+      Object.assign(state.settings, data);
       return;
     }
     if (item.type === "action.bills.upsert" && item.data) {
@@ -335,7 +412,7 @@
       item.data?.targetRef?.itemId
     ) {
       const id = item.data.targetRef.itemId;
-      const fromToday = (buildDigest().today || []).find((row) => row.id === id);
+      const fromToday = (buildDigest().detail?.today || []).find((row) => row.id === id);
       if (fromToday && fromToday.kind === "event") {
         state.watching = state.watching.filter((w) => w.id !== id);
         state.watching.push({
@@ -361,7 +438,12 @@
             settings: {
               monthlyIncome: state.settings.monthlyIncome,
               weeklyIncome: state.settings.weeklyIncome,
-              weeklySavingsTarget: state.settings.weeklySavingsTarget
+              weeklySavingsTarget: state.settings.weeklySavingsTarget,
+              checkingReserve: state.settings.checkingReserve,
+              incomeStreamOverrides: state.settings.incomeStreamOverrides || {},
+              budgetEnvelopes: state.settings.budgetEnvelopes || {},
+              declinedEnvelopeCategories:
+                state.settings.declinedEnvelopeCategories || []
             },
             accounts: state.accounts
           });

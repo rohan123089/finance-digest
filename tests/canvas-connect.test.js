@@ -154,7 +154,7 @@ async function main() {
     const digest = await request(port, "GET", "/api/digest");
     assert.equal(digest.status, 200);
     assert.ok(
-      digest.body.today.some(
+      digest.body.detail.today.some(
         (row) => row.kind === "task" && /Problem set/i.test(row.title)
       ),
       "Canvas assignment should appear in Digest today"

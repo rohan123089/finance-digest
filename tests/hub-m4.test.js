@@ -87,17 +87,17 @@ async function main() {
   });
 
   const assembled = sync.buildDigest(db);
-  assert.ok(assembled.today.some((item) => item.kind === "event"));
-  assert.ok(assembled.today.some((item) => item.kind === "task" && item.id === "rcpt:demo"));
-  assert.ok(assembled.today.some((item) => item.id === "task:owed" || item.kind === "task"));
+  assert.ok(assembled.detail.today.some((item) => item.kind === "event"));
+  assert.ok(assembled.detail.today.some((item) => item.kind === "task" && item.id === "rcpt:demo"));
+  assert.ok(assembled.detail.today.some((item) => item.id === "task:owed" || item.kind === "task"));
   assert.equal(
-    assembled.reading.filter((item) => item.url === "https://example.com/piece").length,
+    assembled.detail.reading.filter((item) => item.url === "https://example.com/piece").length,
     1,
     "duplicate reading URLs must collapse"
   );
-  assert.equal(assembled.reading[0].rank, 1);
-  assert.ok(assembled.reading[0].actions === undefined);
-  assert.ok(assembled.today[0].actions?.length >= 1);
+  assert.equal(assembled.detail.reading[0].rank, 1);
+  assert.ok(assembled.detail.reading[0].actions === undefined);
+  assert.ok(assembled.detail.today[0].actions?.length >= 1);
   assert.equal(typeof assembled.asOfDate, "string");
 
   const server = createServer(db, { projectRoot, syncRoot });
@@ -109,7 +109,7 @@ async function main() {
 
   const digest = await request(port, "GET", "/api/digest");
   assert.equal(digest.body.kind, "digest");
-  assert.ok(digest.body.today.some((item) => item.actions?.length));
+  assert.ok(digest.body.detail.today.some((item) => item.actions?.length));
 
   const ack = await request(port, "POST", "/api/outbox", {
     items: [

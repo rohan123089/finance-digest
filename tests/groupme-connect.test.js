@@ -51,7 +51,9 @@ function request(port, method, urlPath, body) {
 async function main() {
   const prior = {
     token: await secretStore.getConnectorSecret("groupme.token"),
-    groupId: await secretStore.getConnectorSecret("groupme.groupId")
+    groupId: await secretStore.getConnectorSecret("groupme.groupId"),
+    groupIds: await secretStore.getConnectorSecret("groupme.groupIds"),
+    groupMeta: await secretStore.getConnectorSecret("groupme.groupMeta")
   };
 
   async function restorePrior() {
@@ -59,6 +61,12 @@ async function main() {
     if (prior.token) await secretStore.setConnectorSecret("groupme.token", prior.token);
     if (prior.groupId) {
       await secretStore.setConnectorSecret("groupme.groupId", prior.groupId);
+    }
+    if (prior.groupIds) {
+      await secretStore.setConnectorSecret("groupme.groupIds", prior.groupIds);
+    }
+    if (prior.groupMeta) {
+      await secretStore.setConnectorSecret("groupme.groupMeta", prior.groupMeta);
     }
   }
 
@@ -69,12 +77,40 @@ async function main() {
         text: "Dinner Friday 7pm at Luigi's",
         created_at: 1700000000,
         name: "Sam"
+      },
+      {
+        id: "1002",
+        text: "Jayati Agrawal has joined the group",
+        created_at: 1700000001,
+        name: "GroupMe",
+        system: true
+      },
+      {
+        id: "1003",
+        text: "This message was deleted",
+        created_at: 1700000002,
+        name: "GroupMe",
+        system: true
+      },
+      {
+        id: "1004",
+        text: "Random chatter with no plan",
+        created_at: 1700000003,
+        name: "Sam"
       }
     ],
     "0"
   );
   assert.ok(mapped.emitted.length >= 1);
-  assert.equal(mapped.lastId, "1001");
+  assert.equal(mapped.lastId, "1004");
+  assert.ok(
+    mapped.emitted.every((row) => !/joined the group|was deleted/i.test(row.data?.title || "")),
+    "system join/delete chatter must not become Digest signals"
+  );
+  assert.ok(
+    !mapped.emitted.some((row) => /Random chatter/i.test(row.data?.title || "")),
+    "plain chat without event/task language must not become a fallback event"
+  );
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "shelf-groupme-"));
   const dbPath = path.join(tempRoot, "finance.db");
@@ -89,14 +125,19 @@ async function main() {
     fetchImpl: async (url) => {
       const href = String(url);
       if (href.includes("/v3/groups/") && href.includes("/messages")) {
+        const match = href.match(/\/groups\/([^/?]+)\//);
+        const groupId = match ? decodeURIComponent(match[1]) : "unknown";
         return {
           ok: true,
           json: async () => ({
             response: {
               messages: [
                 {
-                  id: "55001",
-                  text: "Study group Saturday 2pm in the library",
+                  id: `55${groupId}`,
+                  text:
+                    groupId === "55"
+                      ? "Office hours Monday 3pm"
+                      : "Study group Saturday 2pm in the library",
                   created_at: Math.floor(Date.now() / 1000),
                   name: "Alex"
                 }
@@ -140,25 +181,46 @@ async function main() {
     assert.equal(groups.body.groups[0].id, "44");
 
     const savedGroup = await request(port, "POST", "/api/groupme/client", {
-      groupId: "44"
+      groupIds: ["44", "55"],
+      groups: [
+        { id: "44", name: "Roommates" },
+        { id: "55", name: "CS 240" }
+      ]
     });
     assert.equal(savedGroup.status, 200);
+    assert.deepEqual(savedGroup.body.groupIds, ["44", "55"]);
 
     const status1 = await request(port, "GET", "/api/groupme/status");
     assert.equal(status1.body.connected, true);
-    assert.equal(status1.body.groupId, "44");
+    assert.deepEqual(status1.body.groupIds, ["44", "55"]);
+    assert.equal(status1.body.groups[0].name, "Roommates");
+    assert.equal(status1.body.groups[1].name, "CS 240");
+
+    // Round-trip: reopen status still has both groups after a second read.
+    const statusAgain = await request(port, "GET", "/api/groupme/status");
+    assert.deepEqual(statusAgain.body.groupIds, ["44", "55"]);
+    assert.equal(statusAgain.body.token, true);
 
     const pulled = await request(port, "POST", "/api/groupme/test", {});
     assert.equal(pulled.status, 200);
     assert.equal(pulled.body.mode, "live");
-    assert.ok(pulled.body.emitted >= 1);
+    assert.ok(pulled.body.emitted >= 2);
+    assert.equal(pulled.body.byGroup["44"], 1);
+    assert.equal(pulled.body.byGroup["55"], 1);
 
     const digest = await request(port, "GET", "/api/digest");
     assert.equal(digest.status, 200);
+    const titles = [
+      ...(digest.body.detail.today || []),
+      ...(digest.body.detail.watching || [])
+    ].map((row) => row.title || "");
     assert.ok(
-      digest.body.today.some((row) => /Study group|library/i.test(row.title)) ||
-        digest.body.watching?.some((row) => /Study group|library/i.test(row.title)),
+      titles.some((title) => /Study group|library/i.test(title)),
       "GroupMe chat should appear in Digest"
+    );
+    assert.ok(
+      titles.some((title) => /Office hours/i.test(title)),
+      "Second group chat should appear in Digest"
     );
 
     const page = await request(port, "GET", "/apps/hub/groupme.html");

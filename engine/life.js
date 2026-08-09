@@ -357,7 +357,6 @@ function extractFromMessage(message, options = {}) {
       });
     }
   }
-
   const forceKind = hints.forceKind || null;
   const deadlineMatch = text.match(DEADLINE_RE);
   const dueAt =

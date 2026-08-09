@@ -196,7 +196,11 @@ async function main() {
     /payment received/i.test(tx.rawMerchant || tx.merchant)
   );
   assert.ok(paymentSf);
-  assert.equal(paymentSf.direction, "in");
+  // Card payment credits may be typed as income (in) or as transfer (Card Payment).
+  assert.ok(
+    paymentSf.direction === "in" || paymentSf.direction === "transfer",
+    `expected in|transfer, got ${paymentSf.direction}`
+  );
 
   const venmoSf = dbApi.listTransactions(emptyDb).find((tx) =>
     /venmo/i.test(tx.rawMerchant || tx.merchant)

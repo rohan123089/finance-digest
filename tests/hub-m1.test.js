@@ -79,12 +79,12 @@ async function main() {
 
   const digest = await request(port, "GET", "/api/digest");
   assert.equal(digest.body.kind, "digest");
-  assert.ok(Array.isArray(digest.body.today));
-  assert.deepEqual(digest.body.reading, []);
-  assert.deepEqual(digest.body.junk, []);
+  assert.ok(Array.isArray(digest.body.detail.today));
+  assert.deepEqual(digest.body.detail.reading, []);
+  assert.deepEqual(digest.body.detail.junk, []);
   // Seeded sample data can surface deterministic money tasks (owed / safe-to-spend).
   assert.ok(
-    digest.body.today.every((item) =>
+    digest.body.detail.today.every((item) =>
       ["task", "birthday", "event", "nudge", "bill", "import"].includes(item.kind)
     )
   );

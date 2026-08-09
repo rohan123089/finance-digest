@@ -24,7 +24,7 @@
     }
     h2 { margin: 0 0 10px; font-size: 15px; }
     label { display: block; color: #91a0ad; font-size: 12px; margin: 10px 0 6px; }
-    input, button, select {
+    input, button {
       font: inherit;
       border-radius: 8px;
       border: 1px solid #283544;
@@ -32,7 +32,7 @@
       color: #edf3f8;
       padding: 8px 10px;
     }
-    input, select { width: 100%; box-sizing: border-box; }
+    input { width: 100%; box-sizing: border-box; }
     button { cursor: pointer; }
     button.primary {
       background: #5ee0a0;
@@ -61,6 +61,28 @@
     .nav { margin-bottom: 16px; }
     .nav a { color: #91a0ad; text-decoration: none; font-size: 13px; }
     code { font-size: 12px; }
+    .group-list {
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid #283544;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #0f151c;
+    }
+    .group-list label.group {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      color: #edf3f8;
+      font-size: 13px;
+      margin: 0;
+      padding: 8px 4px;
+      border-bottom: 1px solid #1c2733;
+      cursor: pointer;
+    }
+    .group-list label.group:last-child { border-bottom: 0; }
+    .group-list input { width: auto; margin-top: 2px; }
+    .group-list .gid { color: #91a0ad; font-size: 11px; }
   </style>
 </head>
 <body>
@@ -68,8 +90,8 @@
     <div class="nav"><a href="/apps/hub/setup.html">← Setup</a></div>
     <h1>GroupMe</h1>
     <p class="sub">
-      Pull recent messages from one GroupMe group into Digest (plans, deadlines, links).
-      Uses your personal access token — secrets stay in the Windows keychain.
+      Pull recent messages from one or more GroupMe groups into Digest.
+      Token + selected groups are stored in the Windows keychain and restored when you reopen this page.
     </p>
 
     <section>
@@ -79,36 +101,39 @@
     </section>
 
     <section>
-      <h2>1 · Get an access token</h2>
+      <h2>1 · Access token</h2>
       <ol>
         <li>Open <a href="https://dev.groupme.com/" target="_blank" rel="noopener">dev.groupme.com</a> and sign in.</li>
-        <li>Click your name → <strong>Access Token</strong> (or create an application and copy the token).</li>
-        <li>Paste it below. Treat it like a password.</li>
+        <li>Copy your <strong>access token</strong> (bots page or application).</li>
+        <li>Paste below — it stays in the keychain after save.</li>
       </ol>
       <label for="token">Access token</label>
       <input id="token" type="password" placeholder="Paste GroupMe access token" autocomplete="off" spellcheck="false">
       <div class="row">
         <button class="primary" id="save-token">Save token</button>
-        <button id="load-groups">Load my groups</button>
+        <button id="load-groups">Load / refresh groups</button>
       </div>
       <div class="meta" id="token-status"></div>
     </section>
 
     <section>
-      <h2>2 · Choose a group</h2>
+      <h2>2 · Groups to pull</h2>
       <p class="meta" style="margin-top:0">
-        After the token is saved, load groups and pick one — or paste a group id from the GroupMe URL
-        (<code>…/chats/GROUP_ID/…</code>).
+        Check every group to watch. Extra ids are only for groups not in the list
+        (<code>123,456</code>).
       </p>
-      <label for="group-select">Group</label>
-      <select id="group-select">
-        <option value="">— load groups or paste id below —</option>
-      </select>
-      <label for="group-id">Group id</label>
-      <input id="group-id" placeholder="e.g. 12345678" spellcheck="false" autocomplete="off">
+      <div class="row" style="margin-top:0">
+        <button type="button" id="select-all">Select all</button>
+        <button type="button" id="select-none">Clear</button>
+      </div>
+      <div class="group-list" id="group-list">
+        <div class="meta" style="margin:8px 4px">Loading saved groups…</div>
+      </div>
+      <label for="group-ids">Extra group ids (optional)</label>
+      <input id="group-ids" placeholder="Only ids not shown above" spellcheck="false" autocomplete="off">
       <div class="row">
-        <button class="primary" id="save-group">Save group</button>
-        <button class="primary" id="test">Test pull → Digest</button>
+        <button class="primary" id="save-all">Save token + groups</button>
+        <button class="primary" id="test">Save &amp; test pull → Digest</button>
         <button class="danger" id="disconnect">Disconnect</button>
       </div>
       <div class="meta" id="save-status"></div>
@@ -117,13 +142,17 @@
     <section>
       <h2>After connect</h2>
       <ol>
-        <li>Click <strong>Test pull</strong> (or Setup → Run connectors once).</li>
+        <li>Use <strong>Save &amp; test pull</strong> (or Setup → Run connectors once).</li>
         <li>Open <a href="/apps/digest/digest.html">Digest</a> — chat plans show under Today / Watching.</li>
+        <li>Reopen this page anytime — saved groups stay checked.</li>
       </ol>
     </section>
   </main>
   <script>
     "use strict";
+
+    let loadedGroups = [];
+    let lastStatus = { groupIds: [], groups: [], token: false };
 
     async function api(path, options) {
       const response = await fetch(path, options);
@@ -143,27 +172,177 @@
       return `<span class="pill ${on ? "on" : "off"}">${label}: ${on ? "yes" : "no"}</span>`;
     }
 
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function selectedFromCheckboxes() {
+      return [...document.querySelectorAll("#group-list input[type=checkbox]:checked")]
+        .map((el) => el.value)
+        .filter(Boolean);
+    }
+
+    function parseExtraIds() {
+      const known = new Set(loadedGroups.map((g) => String(g.id)));
+      return String(document.querySelector("#group-ids").value || "")
+        .split(/[,;\s]+/)
+        .map((id) => id.trim())
+        .filter((id) => id && !known.has(id));
+    }
+
+    function collectGroupIds() {
+      return [...new Set([...selectedFromCheckboxes(), ...parseExtraIds()])];
+    }
+
+    function collectGroupMeta(groupIds) {
+      const byId = new Map(loadedGroups.map((g) => [String(g.id), g.name]));
+      (lastStatus.groups || []).forEach((g) => {
+        if (g.id && g.name && !byId.has(String(g.id))) {
+          byId.set(String(g.id), g.name);
+        }
+      });
+      return groupIds.map((id) => ({
+        id,
+        name: byId.get(String(id)) || String(id)
+      }));
+    }
+
+    function renderGroupList(groups, selectedIds) {
+      const selected = new Set((selectedIds || []).map(String));
+      const root = document.querySelector("#group-list");
+      if (!groups.length) {
+        root.innerHTML =
+          '<div class="meta" style="margin:8px 4px">No groups yet — save a token and load groups.</div>';
+        return;
+      }
+      root.innerHTML = groups.map((group) => {
+        const checked = selected.has(String(group.id)) ? " checked" : "";
+        const members = group.members != null ? ` · ${group.members} members` : "";
+        return `<label class="group">
+          <input type="checkbox" value="${escapeHtml(group.id)}"${checked}>
+          <span>${escapeHtml(group.name)}${members}<br><span class="gid">${escapeHtml(group.id)}</span></span>
+        </label>`;
+      }).join("");
+    }
+
+    function mergeLoadedWithSaved(apiGroups, status) {
+      const byId = new Map();
+      (apiGroups || []).forEach((g) => byId.set(String(g.id), g));
+      (status.groups || []).forEach((g) => {
+        if (!byId.has(String(g.id))) {
+          byId.set(String(g.id), { id: g.id, name: g.name || g.id, members: null });
+        }
+      });
+      (status.groupIds || []).forEach((id) => {
+        if (!byId.has(String(id))) {
+          byId.set(String(id), { id: String(id), name: String(id), members: null });
+        }
+      });
+      return [...byId.values()];
+    }
+
     async function refreshStatus() {
       const status = await api("/api/groupme/status");
+      lastStatus = status;
+      const count = (status.groupIds || []).length;
+      const names = (status.groups || [])
+        .map((g) => g.name || g.id)
+        .join(", ");
       document.querySelector("#status-pills").innerHTML =
         pill("token", status.token) +
-        pill("group", Boolean(status.groupId)) +
+        pill("groups", count > 0) +
         pill("connected", status.connected);
-      document.querySelector("#status-detail").textContent = status.groupId
-        ? `Watching group ${status.groupId}`
+      document.querySelector("#status-detail").textContent = count
+        ? `Saved ${count} group${count === 1 ? "" : "s"}: ${names || status.groupIds.join(", ")}`
         : status.token
-          ? "Token saved — pick a group next."
+          ? "Token saved — pick groups and click Save."
           : "Not connected yet.";
-      if (status.groupId && !document.querySelector("#group-id").value) {
-        document.querySelector("#group-id").value = status.groupId;
+      if (loadedGroups.length) {
+        loadedGroups = mergeLoadedWithSaved(loadedGroups, status);
+        renderGroupList(loadedGroups, status.groupIds || []);
+      } else if (count) {
+        loadedGroups = mergeLoadedWithSaved([], status);
+        renderGroupList(loadedGroups, status.groupIds || []);
       }
       return status;
     }
 
-    document.querySelector("#group-select").addEventListener("change", (event) => {
-      if (event.target.value) {
-        document.querySelector("#group-id").value = event.target.value;
+    async function saveSelection(options = {}) {
+      let token = document.querySelector("#token").value.trim();
+      const groupIds = collectGroupIds();
+      if (!groupIds.length && !options.allowEmptyGroups) {
+        throw new Error("Select at least one group (or paste an extra group id)");
       }
+      // Always refresh status so we know if the keychain already has a token.
+      const before = await api("/api/groupme/status");
+      lastStatus = before;
+      if (!token && !before.token) {
+        throw new Error(
+          "Paste your GroupMe access token in the box above, then click Save"
+        );
+      }
+      const body = {
+        groupIds,
+        groupId: groupIds[0],
+        groups: collectGroupMeta(groupIds)
+      };
+      if (token) body.token = token;
+      const result = await api("/api/groupme/client", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (token) document.querySelector("#token").value = "";
+      const status = await refreshStatus();
+      if (!status.token) {
+        throw new Error("Token did not save — paste it again and retry");
+      }
+      if (!status.connected) {
+        throw new Error("Groups did not save — check the boxes and retry");
+      }
+      if (
+        groupIds.length &&
+        (status.groupIds || []).slice().sort().join(",") !==
+          groupIds.slice().sort().join(",")
+      ) {
+        throw new Error(
+          `Saved groups mismatch (got ${(status.groupIds || []).join(", ")})`
+        );
+      }
+      return { result, status };
+    }
+
+    async function loadGroupsFromApi() {
+      const token = document.querySelector("#token").value.trim();
+      if (token) {
+        await api("/api/groupme/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token })
+        });
+        document.querySelector("#token").value = "";
+      }
+      const payload = await api("/api/groupme/groups");
+      const status = await refreshStatus();
+      loadedGroups = mergeLoadedWithSaved(payload.groups || [], status);
+      renderGroupList(loadedGroups, status.groupIds || []);
+      return { groups: loadedGroups, status };
+    }
+
+    document.querySelector("#select-all").addEventListener("click", () => {
+      document.querySelectorAll("#group-list input[type=checkbox]").forEach((el) => {
+        el.checked = true;
+      });
+    });
+
+    document.querySelector("#select-none").addEventListener("click", () => {
+      document.querySelectorAll("#group-list input[type=checkbox]").forEach((el) => {
+        el.checked = false;
+      });
     });
 
     document.querySelector("#save-token").addEventListener("click", async () => {
@@ -185,54 +364,29 @@
 
     document.querySelector("#load-groups").addEventListener("click", async () => {
       const el = document.querySelector("#token-status");
-      const token = document.querySelector("#token").value.trim();
       setMsg(el, "Loading groups…");
       try {
-        if (token) {
-          await api("/api/groupme/client", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          });
-          document.querySelector("#token").value = "";
-        }
-        const payload = await api("/api/groupme/groups");
-        const select = document.querySelector("#group-select");
-        const status = await refreshStatus();
-        select.innerHTML = '<option value="">— pick a group —</option>';
-        (payload.groups || []).forEach((group) => {
-          const opt = document.createElement("option");
-          opt.value = group.id;
-          opt.textContent = group.members != null
-            ? `${group.name} (${group.members} members)`
-            : group.name;
-          if (status.groupId && status.groupId === group.id) opt.selected = true;
-          select.appendChild(opt);
-        });
-        if (!payload.groups?.length) {
+        const { groups } = await loadGroupsFromApi();
+        if (!groups.length) {
           setMsg(el, "No groups returned — check the token.", false);
           return;
         }
-        setMsg(el, `Loaded ${payload.groups.length} group(s).`, true);
+        setMsg(el, `Loaded ${groups.length} group(s). Check the ones to pull, then Save.`, true);
       } catch (error) {
         setMsg(el, error.message, false);
       }
     });
 
-    document.querySelector("#save-group").addEventListener("click", async () => {
+    document.querySelector("#save-all").addEventListener("click", async () => {
       const el = document.querySelector("#save-status");
-      const groupId =
-        document.querySelector("#group-id").value.trim() ||
-        document.querySelector("#group-select").value;
       setMsg(el, "Saving…");
       try {
-        await api("/api/groupme/client", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ groupId })
-        });
-        setMsg(el, "Group saved.", true);
-        await refreshStatus();
+        const { status } = await saveSelection();
+        setMsg(
+          el,
+          `Saved. Token yes · ${status.groupIds.length} group(s): ${status.groupIds.join(", ")}`,
+          true
+        );
       } catch (error) {
         setMsg(el, error.message, false);
       }
@@ -240,8 +394,9 @@
 
     document.querySelector("#test").addEventListener("click", async () => {
       const el = document.querySelector("#save-status");
-      setMsg(el, "Pulling GroupMe…");
+      setMsg(el, "Saving selection, then pulling…");
       try {
+        await saveSelection();
         const payload = await api("/api/groupme/test", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -251,9 +406,14 @@
           setMsg(el, payload.error || "Skipped — not configured.", false);
           return;
         }
+        const parts = Object.entries(payload.byGroup || {})
+          .map(([id, n]) => `${id}: ${n}`)
+          .join(", ");
         setMsg(
           el,
-          `Live pull ok · ${payload.emitted} signal(s). Open Digest.`,
+          `Saved + live pull ok · ${payload.emitted} signal(s)` +
+            (parts ? ` · ${parts}` : "") +
+            `. Open Digest.`,
           true
         );
       } catch (error) {
@@ -266,9 +426,11 @@
       const el = document.querySelector("#save-status");
       try {
         await api("/api/groupme/disconnect", { method: "POST" });
-        document.querySelector("#group-id").value = "";
-        document.querySelector("#group-select").innerHTML =
-          '<option value="">— load groups or paste id below —</option>';
+        document.querySelector("#group-ids").value = "";
+        loadedGroups = [];
+        lastStatus = { groupIds: [], groups: [], token: false };
+        document.querySelector("#group-list").innerHTML =
+          '<div class="meta" style="margin:8px 4px">No groups yet — save a token and load groups.</div>';
         setMsg(el, "Disconnected.", true);
         setMsg(document.querySelector("#token-status"), "");
         await refreshStatus();
@@ -277,10 +439,39 @@
       }
     });
 
-    refreshStatus().catch((error) => {
-      document.querySelector("#status-detail").textContent = error.message;
-      document.querySelector("#status-detail").className = "meta error";
-    });
+    (async function boot() {
+      try {
+        const status = await refreshStatus();
+        if (status.token) {
+          setMsg(document.querySelector("#token-status"), "Loading groups…");
+          try {
+            const { groups } = await loadGroupsFromApi();
+            setMsg(
+              document.querySelector("#token-status"),
+              groups.length
+                ? `Restored ${status.groupIds.length} saved group(s); ${groups.length} available.`
+                : "Token OK — could not list groups (network?). Saved ids still shown.",
+              groups.length > 0
+            );
+          } catch (error) {
+            // Offline / bad token: still show saved ids as checkboxes.
+            loadedGroups = mergeLoadedWithSaved([], status);
+            renderGroupList(loadedGroups, status.groupIds || []);
+            setMsg(
+              document.querySelector("#token-status"),
+              `Using saved groups (${error.message})`,
+              false
+            );
+          }
+        } else {
+          document.querySelector("#group-list").innerHTML =
+            '<div class="meta" style="margin:8px 4px">Save a token and load groups.</div>';
+        }
+      } catch (error) {
+        document.querySelector("#status-detail").textContent = error.message;
+        document.querySelector("#status-detail").className = "meta error";
+      }
+    })();
   </script>
 </body>
 </html>

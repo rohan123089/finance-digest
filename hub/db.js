@@ -1132,12 +1132,23 @@ function bumpSettingsStamp(db) {
 function getSettings(db) {
   const maps = getAccountMaps(db);
   let incomeStreamOverrides = {};
+  let budgetEnvelopes = {};
+  let declinedEnvelopeCategories = [];
   try {
     incomeStreamOverrides = Model.normalizeIncomeOverrides(
       JSON.parse(getMeta(db, "incomeStreamOverrides", "{}") || "{}")
     );
   } catch (_error) {
     incomeStreamOverrides = {};
+  }
+  try {
+    budgetEnvelopes = JSON.parse(getMeta(db, "budgetEnvelopes", "{}") || "{}");
+    declinedEnvelopeCategories = JSON.parse(
+      getMeta(db, "declinedEnvelopeCategories", "[]") || "[]"
+    );
+  } catch (_error) {
+    budgetEnvelopes = {};
+    declinedEnvelopeCategories = [];
   }
   return {
     asOfDate: getMeta(db, "asOfDate", Model.todayIso()),
@@ -1152,6 +1163,8 @@ function getSettings(db) {
       getMeta(db, "checkingReserve", Model.DEFAULT_CONFIG.checkingReserve)
     ),
     incomeStreamOverrides,
+    budgetEnvelopes,
+    declinedEnvelopeCategories,
     accountTypes: maps.accountTypes,
     openingBalances: maps.openingBalances,
     accountLabels: maps.labels,
@@ -1166,6 +1179,16 @@ function saveSettings(db, settings) {
   }
   if (settings.checkingReserve != null) {
     setMeta(db, "checkingReserve", settings.checkingReserve);
+  }
+  if (settings.budgetEnvelopes != null) {
+    setMeta(db, "budgetEnvelopes", JSON.stringify(settings.budgetEnvelopes || {}));
+  }
+  if (settings.declinedEnvelopeCategories != null) {
+    setMeta(
+      db,
+      "declinedEnvelopeCategories",
+      JSON.stringify(settings.declinedEnvelopeCategories || [])
+    );
   }
   if (settings.incomeStreamOverrides != null) {
     const prev = getSettings(db).incomeStreamOverrides || {};

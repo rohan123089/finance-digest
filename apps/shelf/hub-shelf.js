@@ -69,6 +69,7 @@
           if (opts.since) qs.set("since", opts.since);
           if (opts.txCursor) qs.set("txCursor", opts.txCursor);
           if (opts.settingsStamp) qs.set("settingsStamp", opts.settingsStamp);
+          if (opts.engineVersion) qs.set("engineVersion", opts.engineVersion);
           if (opts.asOfDate) qs.set("asOfDate", opts.asOfDate);
           if (opts.syncCursor) qs.set("syncCursor", opts.syncCursor);
           if (opts.billsCursor) qs.set("billsCursor", opts.billsCursor);
@@ -129,6 +130,31 @@
           return request(`/api/bills/${encodeURIComponent(id)}`, {
             method: "DELETE"
           });
+        },
+        fromSuggestion(suggestion) {
+          return request("/api/bills/from-suggestion", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(suggestion)
+          });
+        }
+      },
+      learned: {
+        list(scope) {
+          const qs = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+          return request(`/api/learned${qs}`);
+        },
+        upsert(rule) {
+          return request("/api/learned", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(rule)
+          });
+        },
+        deactivate(id) {
+          return request(`/api/learned/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          });
         }
       },
       import: {
@@ -174,6 +200,15 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(rule)
+          });
+        }
+      },
+      money: {
+        recategorize(force) {
+          return request("/api/transactions/recategorize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: Boolean(force) })
           });
         }
       },

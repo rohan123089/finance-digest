@@ -131,6 +131,8 @@
         <button type="button" data-tab="sync">Sync</button>
       </div>
       <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--blue);font-size:13px;text-decoration:none">Setup</a>
+      <a id="full-money-link" href="/apps/money/money.html" style="color:var(--accent);font-size:13px;text-decoration:none">Full Money</a>
+      <a id="full-digest-link" href="/apps/digest/digest.html" style="color:var(--accent);font-size:13px;text-decoration:none">Full Digest</a>
       <div class="bridge" id="bridge">Starting…</div>
       <div class="bridge" id="load-progress" hidden></div>
     </div>
@@ -140,7 +142,7 @@
     <!-- MONEY -->
     <section class="panel on" id="tab-money">
       <div class="hero">
-        <div class="eyebrow" id="safe-label">Safe to spend</div>
+        <div class="eyebrow" id="safe-label">Safe to spend this week</div>
         <div class="safe" id="safe-value">—</div>
         <div class="muted" id="safe-detail">Load from Shelf…</div>
       </div>
@@ -164,6 +166,10 @@
       <h2 style="margin-top:18px">Transactions <span class="muted" id="review-count"></span></h2>
       <div id="tx-list" class="muted">—</div>
       <p class="status" id="money-status"></p>
+      <p class="muted" style="margin-top:14px">
+        Laptop full Money review (categories, Amex/Discover, UWCU PDF/CSV import, rewards):
+        <a href="/apps/money/money.html">Open full Money page</a>
+      </p>
     </section>
 
     <!-- DIGEST -->
@@ -179,6 +185,10 @@
         <div class="digest-box"><h3>Junk</h3><div id="junk"></div></div>
       </div>
       <p class="status" id="digest-status">—</p>
+      <p class="muted" style="margin-top:14px">
+        Laptop full Digest (Today with Personal/School filters, Watching, Reading, Junk, AI nudges):
+        <a href="/apps/digest/digest.html">Open full Digest page</a>
+      </p>
     </section>
 
     <!-- SYNC (Shelf = doorway only; hub owns data) -->
@@ -342,6 +352,7 @@
           if (opts.since) qs.set("since", opts.since);
           if (opts.txCursor) qs.set("txCursor", opts.txCursor);
           if (opts.settingsStamp) qs.set("settingsStamp", opts.settingsStamp);
+          if (opts.engineVersion) qs.set("engineVersion", opts.engineVersion);
           if (opts.asOfDate) qs.set("asOfDate", opts.asOfDate);
           if (opts.syncCursor) qs.set("syncCursor", opts.syncCursor);
           if (opts.billsCursor) qs.set("billsCursor", opts.billsCursor);
@@ -402,6 +413,31 @@
           return request(`/api/bills/${encodeURIComponent(id)}`, {
             method: "DELETE"
           });
+        },
+        fromSuggestion(suggestion) {
+          return request("/api/bills/from-suggestion", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(suggestion)
+          });
+        }
+      },
+      learned: {
+        list(scope) {
+          const qs = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+          return request(`/api/learned${qs}`);
+        },
+        upsert(rule) {
+          return request("/api/learned", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(rule)
+          });
+        },
+        deactivate(id) {
+          return request(`/api/learned/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          });
         }
       },
       import: {
@@ -447,6 +483,15 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(rule)
+          });
+        }
+      },
+      money: {
+        recategorize(force) {
+          return request("/api/transactions/recategorize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: Boolean(force) })
           });
         }
       },
@@ -683,15 +728,20 @@
       safeToSpend: {
         period: safe.period,
         periodSource: safe.periodSource,
+        fundingMode: safe.fundingMode,
         nextPayday: safe.nextPayday,
         horizonDays: safe.horizonDays,
-        amount: safe.amount,
+        allocationWeeks: safe.allocationWeeks,
+        horizonSource: safe.horizonSource,
+        amount: safe.amount ?? safe.remaining,
         income: safe.income,
         weeklyIncome: safe.weeklyIncome,
         committed: safe.committed,
         savingsTarget: safe.savingsTarget,
+        savingsRemaining: safe.savingsRemaining,
         spent: safe.spent,
-        remaining: safe.remaining
+        remaining: safe.remaining,
+        breakdown: safe.breakdown || null
       }
     };
   }
@@ -712,16 +762,16 @@
     }
     const safe = snap.safeToSpend || {};
     const el = document.querySelector("#safe-value");
-    el.textContent = money.format(safe.remaining || 0);
+    el.textContent = money.format(safe.amount || 0);
     el.classList.toggle("neg", (safe.remaining || 0) < 0);
-    document.querySelector("#safe-label").textContent = safe.nextPayday
-      ? "Safe to spend until " + safe.nextPayday
-      : "Safe to spend";
+    document.querySelector("#safe-label").textContent =
+      "Safe to spend this week · after saving";
+    const bd = safe.breakdown || {};
     document.querySelector("#safe-detail").textContent =
-      money.format(safe.income ?? safe.weeklyIncome ?? 0) + " in − " +
-      money.format(safe.committed || 0) + " committed − " +
-      money.format(safe.savingsTarget || 0) + " savings − " +
-      money.format(safe.spent || 0) + " spent";
+      money2.format(safe.remaining || 0) + " remaining · " +
+      money2.format(bd.periodIncome || safe.income || 0) + " income − " +
+      money2.format(bd.committedBills || safe.committed || 0) + " bills − " +
+      money2.format(bd.savingsTarget || safe.savingsTarget || 0) + " savings";
     document.querySelector("#m-nw").textContent = money.format(snap.netWorth || 0);
     document.querySelector("#m-liq").textContent = money.format(snap.liquid || 0);
     document.querySelector("#m-owed").textContent = money.format(snap.owed || 0);
@@ -768,6 +818,8 @@
       "rsvp.no": "Not going",
       "task.complete": "Done",
       "calendar.add": "Calendar",
+      "budget.ratchet.accept": "Save more",
+      snooze: "Snooze",
       dismiss: "Dismiss",
       ack: "Ack",
       unsubscribe: "Run"
@@ -878,6 +930,7 @@
       ? {
           txCursor: txPayload?.cursor || cache.txCursor || "",
           settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+          engineVersion: cache.engineVersion || "",
           asOfDate: txPayload?.asOfDate || cache.asOfDate || ""
         }
       : {});
@@ -917,6 +970,7 @@
       snapshot: slimSnapshot(snapshot),
       txCursor: txPayload?.cursor || cache.txCursor || "",
       settingsStamp: txPayload?.settingsStamp || cache.settingsStamp || "",
+      engineVersion: snap?.cursor?.engineVersion || cache.engineVersion || "",
       asOfDate: txPayload?.asOfDate || cache.asOfDate || "",
       txCount: txPayload?.txCount || rows.length
     });
@@ -1250,6 +1304,17 @@
     loadDoorway().catch(() => {});
   });
 
+  // Keep Money hero current while the page stays open.
+  setInterval(() => {
+    if (document.visibilityState === "visible") refreshMoney().catch(() => {});
+  }, 15000);
+  window.addEventListener("focus", () => {
+    refreshMoney().catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refreshMoney().catch(() => {});
+  });
+
   boot().catch((error) => {
     const box = document.querySelector("#boot-error");
     box.hidden = false;
@@ -1269,6 +1334,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  // Bump when category rules change so the hub re-applies offline labels.
+  const CATEGORY_RULES_VERSION = 3;
+
   // Legacy sample ids + starter registry ids. Prefer DB accountTypes at runtime.
   const ACCOUNT_TYPES = {
     checking: "cash",
@@ -1276,32 +1344,245 @@
     "uwcu-checking": "cash",
     "uwcu-savings": "cash",
     vanguard: "investment",
+    "vanguard-brokerage": "investment",
     amex: "liability",
     discover: "liability",
     "outside-payments": "external"
   };
 
-  // First match wins. Edit this table to change categorization.
+  /**
+   * Brand / keyword rules. First match wins.
+   * Matching runs on a normalized merchant string (prefixes stripped).
+   * Soft word boundaries: refuse alphanumeric before the phrase; after is
+   * allowed when the phrase is long enough (handles CAFEDOWNERS glue).
+   */
   const CATEGORY_RULES = [
     { contains: "payroll", category: "income" },
+
+    // Groceries
     { contains: "trader joe", category: "groceries" },
     { contains: "whole foods", category: "groceries" },
+    { contains: "pete's fresh", category: "groceries" },
+    { contains: "petes fresh", category: "groceries" },
+    { contains: "pikeplacemark", category: "groceries" },
+    { contains: "pike place", category: "groceries" },
+    { contains: "365 market", category: "groceries" },
+    { contains: "safeway", category: "groceries" },
+    { contains: "kroger", category: "groceries" },
+    { contains: "costco", category: "groceries" },
+    { contains: "aldi", category: "groceries" },
+
+    // Dining / cafes / chains
+    { contains: "chipotle", category: "dining" },
+    { contains: "qdoba", category: "dining" },
+    { contains: "starbucks", category: "dining" },
+    { contains: "culver", category: "dining" },
+    { contains: "sbarro", category: "dining" },
+    { contains: "potbelly", category: "dining" },
+    { contains: "mcdonald", category: "dining" },
+    { contains: "manchu wok", category: "dining" },
+    { contains: "ben & jerry", category: "dining" },
+    { contains: "ben and jerry", category: "dining" },
+    { contains: "doordash", category: "dining" },
+    { contains: "ubereats", category: "dining" },
+    { contains: "uber eats", category: "dining" },
+    { contains: "grubhub", category: "dining" },
+    { contains: "coffee", category: "dining" },
+    { contains: "cafe", category: "dining", loose: true },
+    { contains: "crêpe", category: "dining", loose: true },
+    { contains: "crepe", category: "dining", loose: true },
+    { contains: "taqueria", category: "dining" },
+    { contains: "taco", category: "dining", loose: true },
+    { contains: "burger", category: "dining", loose: true },
+    { contains: "pizza", category: "dining" },
+    { contains: "sushi", category: "dining" },
+    { contains: "bakery", category: "dining" },
+    { contains: "bistro", category: "dining" },
+    { contains: "diner", category: "dining" },
+    { contains: "kitchen", category: "dining" },
+    { contains: "grill", category: "dining" },
+    { contains: "patiss", category: "dining" },
+    { contains: "gelat", category: "dining", loose: true },
+    { contains: "cantine", category: "dining" },
+    { contains: "canteen", category: "dining" },
+    { contains: "deli", category: "dining" },
+    { contains: "seafood", category: "dining" },
+    { contains: "seafoo", category: "dining", loose: true },
+    { contains: "tamales", category: "dining" },
+    { contains: "crumpet", category: "dining" },
+    { contains: "thai", category: "dining" },
+    { contains: "ramen", category: "dining" },
+    { contains: "noodle", category: "dining" },
+    { contains: "bagel", category: "dining" },
+    { contains: "donut", category: "dining" },
+    { contains: "doughnut", category: "dining" },
+    { contains: "ice cream", category: "dining" },
+    { contains: "smoothie", category: "dining" },
+    { contains: "brew", category: "dining" },
+    { contains: "wine", category: "dining" },
+    { contains: "bar ", category: "dining" },
+    { contains: "lounge", category: "dining" },
+    { contains: "restaurant", category: "dining" },
+
+    // Transportation / transit / fuel / rides (before generic grocery "qfc")
     { contains: "shell", category: "transportation" },
+    { contains: "exxonmobil", category: "transportation" },
+    { contains: "exxon", category: "transportation", loose: true },
+    { contains: "mobil", category: "transportation", loose: true },
+    { contains: "bp#", category: "transportation", loose: true },
+    { contains: "bp ", category: "transportation" },
+    { contains: "chevron", category: "transportation" },
+    { contains: "qfc fuel", category: "transportation" },
+    { contains: "qfc", category: "groceries" },
     { contains: "uber", category: "transportation" },
-    { contains: "netflix", category: "subscriptions" },
-    { contains: "spotify", category: "subscriptions" },
+    { contains: "lyft", category: "transportation" },
+    { contains: "freenow", category: "transportation" },
+    { contains: "orca", category: "transportation" },
+    { contains: "ventra", category: "transportation" },
+    { contains: "nyct", category: "transportation" },
+    { contains: "lirr", category: "transportation" },
+    { contains: "njt rail", category: "transportation" },
+    { contains: "clipper", category: "transportation" },
+    { contains: "wsferries", category: "transportation" },
+    { contains: "ferry", category: "transportation" },
+    { contains: "spot hero", category: "transportation" },
+    { contains: "spothero", category: "transportation" },
+    { contains: "parking", category: "transportation" },
+    { contains: "turo", category: "transportation" },
+    { contains: "discount-tire", category: "transportation" },
+    { contains: "discount tire", category: "transportation" },
+    { contains: "aaa ", category: "transportation" },
+    { contains: "roadside", category: "transportation" },
+    { contains: "flughafen", category: "travel" },
+    { contains: "airport", category: "travel" },
+
+    // Travel (lodging / flights / booking)
+    { contains: "airbnb", category: "travel" },
+    { contains: "hotel", category: "travel" },
+    { contains: "marriott", category: "travel" },
+    { contains: "hilton", category: "travel" },
+    { contains: "hyatt", category: "travel" },
+    { contains: "united airlines", category: "travel" },
+    { contains: "american airlines", category: "travel" },
+    { contains: "delta air", category: "travel" },
+    { contains: "southwest air", category: "travel" },
+    { contains: "jetblue", category: "travel" },
+    { contains: "alaska air", category: "travel" },
+    { contains: "lufthansa", category: "travel" },
+    { contains: "deutsche luft", category: "travel" },
+    { contains: "edreams", category: "travel" },
+    { contains: "expedia", category: "travel" },
+    { contains: "booking.com", category: "travel" },
+    { contains: "kayak", category: "travel" },
+
+    // Housing / utilities
     { contains: "rent", category: "housing" },
     { contains: "electric", category: "utilities" },
     { contains: "water", category: "utilities" },
-    { contains: "chipotle", category: "dining" },
-    { contains: "coffee", category: "dining" },
+    { contains: "comcast", category: "utilities" },
+    { contains: "xfinity", category: "utilities" },
+    { contains: "verizon", category: "utilities" },
+    { contains: "at&t", category: "utilities" },
+    { contains: "t-mobile", category: "utilities" },
+
+    // Subscriptions / software
+    { contains: "netflix", category: "subscriptions" },
+    { contains: "spotify", category: "subscriptions" },
+    { contains: "hulu", category: "subscriptions" },
+    { contains: "disney+", category: "subscriptions" },
+    { contains: "youtube", category: "subscriptions" },
+    { contains: "nytimes", category: "subscriptions" },
+    { contains: "ny times", category: "subscriptions" },
+    { contains: "openai", category: "subscriptions" },
+    { contains: "chatgpt", category: "subscriptions" },
+    { contains: "anthropic", category: "subscriptions" },
+    { contains: "claude", category: "subscriptions" },
+    { contains: "cursor", category: "subscriptions" },
+    { contains: "github", category: "subscriptions" },
+    { contains: "adobe", category: "subscriptions" },
+    { contains: "apple.com/bill", category: "subscriptions" },
+    { contains: "google*youtube", category: "subscriptions" },
+
+    // Health
     { contains: "cvs", category: "health" },
+    { contains: "walgreens", category: "health" },
+    { contains: "pharmacy", category: "health" },
+    { contains: "apothecary", category: "health" },
+    { contains: "rite aid", category: "health" },
+
+    // Shopping
+    { contains: "target", category: "shopping" },
+    { contains: "walmart", category: "shopping" },
+    { contains: "amazon", category: "shopping" },
+    { contains: "amz*", category: "shopping", loose: true },
+    { contains: "michaels", category: "shopping" },
+    { contains: "gamestop", category: "shopping" },
+    { contains: "fabletics", category: "shopping" },
+    { contains: "micro center", category: "shopping" },
+    { contains: "best buy", category: "shopping" },
     { contains: "bookshop", category: "shopping" },
-    { contains: "cinema", category: "entertainment" }
+    { contains: "worn again", category: "shopping" },
+    { contains: "empower*", category: "shopping", loose: true },
+
+    // Entertainment
+    { contains: "cinemark", category: "entertainment" },
+    { contains: "cinema", category: "entertainment" },
+    { contains: "amc ", category: "entertainment" },
+    { contains: "regal", category: "entertainment" },
+    { contains: "wrigley", category: "entertainment" },
+    { contains: "allstate aren", category: "entertainment", loose: true },
+    { contains: "allstate arena", category: "entertainment" },
+    { contains: "ticketmaster", category: "entertainment" },
+    { contains: "american players", category: "entertainment" },
+    { contains: "museum", category: "entertainment" },
+    { contains: "zoo", category: "entertainment" },
+    { contains: "plitvice", category: "entertainment" },
+
+    // Fees (keep visible in diagnosis)
+    { contains: "foreign transaction fee", category: "fees" },
+    { contains: "late fee", category: "fees" },
+    { contains: "interest charge", category: "fees" }
+  ];
+
+  // Regex heuristics after keyword miss — still fully offline.
+  const CATEGORY_PATTERNS = [
+    { category: "dining", pattern: /\btst\*/i },
+    { category: "dining", pattern: /\bcafe\b/i },
+    { category: "dining", pattern: /cafe[a-z]/i },
+    { category: "dining", pattern: /\b(restaurant|eatery|brasserie|trattoria|osteria)\b/i },
+    { category: "dining", pattern: /\b(coffee|espresso|roastery|tea house)\b/i },
+    { category: "transportation", pattern: /\b(metro|transit|mta|cta|bart|caltrain)\b/i },
+    { category: "transportation", pattern: /\b(gas|fuel|petrol)\b/i },
+    { category: "travel", pattern: /\b(airlines?|airways|airport)\b/i },
+    { category: "travel", pattern: /\b(hotel|motel|inn|hostel|lodging)\b/i },
+    { category: "entertainment", pattern: /\b(theatre|theater|concert|festival)\b/i },
+    { category: "subscriptions", pattern: /\b(subscription|membership)\b/i },
+    { category: "fees", pattern: /\b(foreign\s+transaction|service\s+fee|annual\s+fee)\b/i }
   ];
 
   const TYPING_RULES = [
     { contains: "payroll", direction: "in", merchant: "Employer Payroll" },
+    { contains: "dir dep", direction: "in", merchant: "Direct Deposit" },
+    { contains: "direct dep", direction: "in", merchant: "Direct Deposit" },
+    // UWCU ACH wording (hyphen). Plain "VENMO PAYMENT" on cards stays review.
+    { contains: "venmo -cashout", direction: "in", merchant: "Venmo Cashout" },
+    {
+      contains: "venmo -payment",
+      direction: "out",
+      merchant: "Venmo Payment"
+    },
+    {
+      contains: "tfr to sv",
+      direction: "transfer",
+      merchant: "Savings Transfer",
+      transferAccount: "uwcu-savings"
+    },
+    {
+      contains: "tfr to ck",
+      direction: "transfer",
+      merchant: "Checking Transfer",
+      transferAccount: "uwcu-checking"
+    },
     {
       contains: "transfer to savings",
       direction: "transfer",
@@ -1348,6 +1629,12 @@
       requires: /\b(epayment|e-?payment|ach|pmt|payment)\b/i
     },
     {
+      contains: "payment received - thank you",
+      direction: "transfer",
+      merchant: "Card Payment",
+      transferAccount: ""
+    },
+    {
       contains: "vanguard buy",
       direction: "transfer",
       merchant: "Vanguard",
@@ -1383,6 +1670,39 @@
       .trim();
   }
 
+  /** Strip wallet/POS prefixes so brand rules see the real merchant. */
+  function normalizeMerchantForCategory(merchant) {
+    return String(merchant || "")
+      .toLowerCase()
+      .replace(/^gglpay\s+/i, "")
+      .replace(/^google\s*pay\s+/i, "")
+      .replace(/^sq\s*\*?\s*/i, "")
+      .replace(/^tst\*\s*/i, "")
+      .replace(/^sp\s+/i, "")
+      .replace(/^amz\*/i, "")
+      .replace(/^ctlp\*/i, "")
+      .replace(/^fsp\*/i, "")
+      .replace(/[^a-z0-9&'+.*# ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function phraseMatches(haystack, phrase, loose) {
+    const start = haystack.indexOf(phrase);
+    if (start === -1) return false;
+    const before = haystack[start - 1] || " ";
+    const after = haystack[start + phrase.length] || " ";
+    if (loose) {
+      // Allow glued Amex truncations (7THSTREETBURGER, CAFEDOWNERS) for
+      // phrases long enough to avoid false hits like "rent" inside "parent".
+      if (/[a-z0-9]/.test(before) && phrase.length < 5) return false;
+      return true;
+    }
+    if (/[a-z0-9]/.test(before)) return false;
+    if (/[a-z0-9]/.test(after) && phrase.length < 6) return false;
+    return true;
+  }
+
   function findSubstringRule(value, rules) {
     const normalized = String(value || "").toLowerCase();
     return rules.find((rule) => {
@@ -1398,8 +1718,27 @@
   }
 
   function categoryFor(merchant) {
-    const match = findSubstringRule(merchant, CATEGORY_RULES);
-    return match ? match.category : "uncategorized";
+    const raw = String(merchant || "");
+    const norm = normalizeMerchantForCategory(raw);
+
+    for (const rule of CATEGORY_RULES) {
+      const phrase = rule.contains.toLowerCase();
+      if (phraseMatches(norm, phrase, Boolean(rule.loose))) {
+        return rule.category;
+      }
+      // Also try original string for odd punctuation the normalizer dropped.
+      if (phraseMatches(raw.toLowerCase(), phrase, Boolean(rule.loose))) {
+        return rule.category;
+      }
+    }
+
+    for (const rule of CATEGORY_PATTERNS) {
+      if (rule.pattern.test(raw) || rule.pattern.test(norm)) {
+        return rule.category;
+      }
+    }
+
+    return "uncategorized";
   }
 
   function resolveAccountTypes(override) {
@@ -1412,22 +1751,33 @@
   function normalizeTransaction(raw, accountTypesOverride) {
     const accountTypes = resolveAccountTypes(accountTypesOverride);
     const typingRule = findSubstringRule(raw.rawMerchant, TYPING_RULES);
-    const ambiguous = AMBIGUOUS_MERCHANTS.some((name) =>
-      String(raw.rawMerchant || "").toLowerCase().includes(name)
-    );
+    const merchantLower = String(raw.rawMerchant || "").toLowerCase();
+    const debitLike =
+      /\bdebitcard\b/.test(merchantLower) ||
+      /\bpurchase\s+visa\b/.test(merchantLower) ||
+      /\batm\b/.test(merchantLower);
+    const ambiguous =
+      !debitLike &&
+      AMBIGUOUS_MERCHANTS.some((name) => merchantLower.includes(name));
     const accountType = accountTypes[raw.account];
     if (!accountType) throw new Error(`Unknown account: ${raw.account}`);
     if (!VALID_ACCOUNT_TYPES.has(accountType)) {
       throw new Error(`Invalid account type for ${raw.account}: ${accountType}`);
     }
 
-    let direction = typingRule ? typingRule.direction : "out";
-    if (ambiguous && !typingRule) direction = "";
+    let direction = typingRule?.direction ? typingRule.direction : "out";
+    if (ambiguous && !typingRule?.direction) direction = "";
 
-    // Prefer an explicit direction hint from import/SimpleFIN when not ambiguous.
-    if (!typingRule && !ambiguous && raw.directionHint) {
+    // Signed bank/CSV exports win over ambiguous merchant defaults.
+    // Venmo/Zelle still need review, but amount sign is usually correct.
+    if ((!typingRule || !typingRule.direction) && raw.directionHint) {
       const hint = String(raw.directionHint);
       if (hint === "in" || hint === "out" || hint === "transfer") direction = hint;
+    }
+
+    // Debit-card Visa Direct → Venmo is still a card purchase (money out).
+    if ((!typingRule || !typingRule.direction) && !direction && debitLike) {
+      direction = /return/.test(merchantLower) ? "in" : "out";
     }
 
     const merchant = typingRule?.merchant || cleanMerchant(raw.rawMerchant);
@@ -1454,6 +1804,16 @@
       transferAccount = "";
     }
 
+    // Card payment rows often land on the card account already — leave target blank
+    // for review rather than inventing a cash account.
+    if (
+      typingRule &&
+      typingRule.merchant === "Card Payment" &&
+      !transferAccount
+    ) {
+      // keep transfer with empty target → needsReview
+    }
+
     return {
       id: String(raw.id),
       account: raw.account,
@@ -1464,7 +1824,14 @@
       amount: Math.abs(Number(raw.amount)),
       date: raw.date,
       needsReview:
-        ambiguous || (!typingRule && direction !== "out" && direction !== "in"),
+        ambiguous ||
+        !direction ||
+        (direction !== "out" &&
+          direction !== "in" &&
+          direction !== "transfer") ||
+        (direction === "transfer" &&
+          !transferAccount &&
+          typingRule?.merchant === "Card Payment"),
       transferAccount,
       suggestedTransferAccount: ambiguous ? savingsHint : ""
     };
@@ -1478,32 +1845,436 @@
     ACCOUNT_TYPES,
     VALID_ACCOUNT_TYPES,
     CATEGORY_RULES,
+    CATEGORY_PATTERNS,
+    CATEGORY_RULES_VERSION,
     TYPING_RULES,
     AMBIGUOUS_MERCHANTS,
     categoryFor,
     cleanMerchant,
+    normalizeMerchantForCategory,
     normalizeTransaction,
     normalizeTransactions
   };
 });
 
   </script>
-  <script type="text/plain" id="src-model">
+  <script type="text/plain" id="src-budget">
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  root.MoneyModel = api;
+  root.MoneyBudget = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
+
+  const PERIOD = "week";
+  const PAUSE_THRESHOLD = 25;
+  const COOLDOWN_THRESHOLD = 100;
+  const RATCHET_STREAK_N = 3;
+  const RATCHET_MARGIN = 0.1;
+  const RATCHET_STEP = 10;
+  const LEAK_THRESHOLD = 0.4;
+  const ROLLING_PERIODS = 6;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const CONFIG = Object.freeze({
+    PERIOD,
+    PAUSE_THRESHOLD,
+    COOLDOWN_THRESHOLD,
+    RATCHET_STREAK_N,
+    RATCHET_MARGIN,
+    RATCHET_STEP,
+    LEAK_THRESHOLD,
+    ROLLING_PERIODS
+  });
+
+  function roundMoney(value) {
+    return Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+  }
+
+  function parseDate(iso) {
+    return new Date(`${iso}T12:00:00Z`);
+  }
+
+  function isoDate(date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  function addDays(date, days) {
+    return new Date(date.getTime() + days * DAY_MS);
+  }
+
+  function weekBounds(asOfDate, offset = 0) {
+    const date = parseDate(asOfDate);
+    const weekday = date.getUTCDay();
+    const sinceMonday = weekday === 0 ? 6 : weekday - 1;
+    const start = addDays(date, -sinceMonday + offset * 7);
+    return {
+      start: isoDate(start),
+      end: isoDate(addDays(start, 7)),
+      label: `${isoDate(start)} / ${isoDate(addDays(start, 6))}`
+    };
+  }
+
+  function inBounds(date, bounds) {
+    return Boolean(date && date >= bounds.start && date < bounds.end);
+  }
+
+  function isIncome(tx) {
+    return tx?.direction === "in" || tx?.direction === "money-in";
+  }
+
+  function isExpense(tx) {
+    return tx?.direction === "out" || tx?.direction === "money-out";
+  }
+
+  function streamKey(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\b(debitcard|pos|purchase|withdrawal|ach|checkcard|visa|mastercard)\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function amountToWeek(amount, cadenceLabel, cadenceDays) {
+    const value = Number(amount) || 0;
+    if (!value) return 0;
+    if (cadenceLabel === "weekly" || Number(cadenceDays) === 7) return value;
+    if (cadenceLabel === "biweekly") return value / 2;
+    if (cadenceLabel === "bimonthly") return value * (7 / 60.875);
+    const days = Number(cadenceDays) || 30.4375;
+    return value * (7 / days);
+  }
+
+  function recurringIdentity(snapshot) {
+    const ids = new Set();
+    const keys = new Set();
+    const rows = snapshot?.recurring || snapshot?.safeToSpend?.expenseStreams || [];
+    rows.forEach((row) => {
+      (row.transactionIds || []).forEach((id) => ids.add(id));
+      if (row.key) keys.add(row.key);
+      else if (row.merchant) keys.add(streamKey(row.merchant));
+    });
+    return { ids, keys };
+  }
+
+  function discretionaryTransactions(snapshot, transactions, bounds) {
+    const recurring = recurringIdentity(snapshot);
+    return (transactions || []).filter((tx) => {
+      if (!isExpense(tx) || tx.duplicateOf || !Number.isFinite(Number(tx.amount))) {
+        return false;
+      }
+      if (!inBounds(tx.date, bounds)) return false;
+      if (recurring.ids.has(tx.id)) return false;
+      return !recurring.keys.has(streamKey(tx.merchant || tx.rawMerchant));
+    });
+  }
+
+  function periodIncomeFromSnapshot(snapshot) {
+    const safe = snapshot?.safeToSpend || {};
+    const value =
+      safe.weeklyIncome ?? safe.incomeExpected ?? safe.income ?? snapshot?.weeklyIncome;
+    return roundMoney(Math.max(0, Number(value) || 0));
+  }
+
+  function committedBillsFromSnapshot(snapshot) {
+    const due = snapshot?.safeToSpend?.dueThisWeek;
+    if (Array.isArray(due) && due.length) {
+      return roundMoney(
+        due.reduce((sum, row) => sum + Math.max(0, Number(row.amount) || 0), 0)
+      );
+    }
+    return roundMoney(
+      (snapshot?.recurring || []).reduce(
+        (sum, row) =>
+          sum + amountToWeek(row.amount, row.cadenceLabel, row.cadenceDays),
+        0
+      )
+    );
+  }
+
+  function initializeSavingsTarget(snapshot, periodIncome) {
+    const rate = Math.max(0, Math.min(1, Number(snapshot?.savingsRate) || 0));
+    return roundMoney(Math.max(0, Number(periodIncome) || 0) * rate);
+  }
+
+  function safeToSpend(periodIncome, committedBills, savingsTarget) {
+    return roundMoney(
+      Math.max(
+        0,
+        (Number(periodIncome) || 0) -
+          (Number(committedBills) || 0) -
+          (Number(savingsTarget) || 0)
+      )
+    );
+  }
+
+  function computeBudget(snapshot, transactions, options = {}) {
+    const asOfDate = options.asOfDate || snapshot?.asOfDate;
+    if (!asOfDate) throw new Error("computeBudget requires asOfDate");
+    const bounds = weekBounds(asOfDate, Number(options.periodOffset) || 0);
+    const periodIncome =
+      options.periodIncome != null
+        ? roundMoney(options.periodIncome)
+        : periodIncomeFromSnapshot(snapshot);
+    const committedBills =
+      options.committedBills != null
+        ? roundMoney(options.committedBills)
+        : committedBillsFromSnapshot(snapshot);
+    const configuredTarget =
+      options.savingsTarget ??
+      snapshot?.safeToSpend?.savingsTarget ??
+      initializeSavingsTarget(snapshot, periodIncome);
+    const savingsTarget = roundMoney(Math.max(0, Number(configuredTarget) || 0));
+    const amount = safeToSpend(periodIncome, committedBills, savingsTarget);
+    const discretionary = discretionaryTransactions(snapshot, transactions, bounds);
+    const spent = roundMoney(
+      discretionary.reduce((sum, tx) => sum + Number(tx.amount), 0)
+    );
+    return {
+      period: PERIOD,
+      periodLabel: bounds.label,
+      periodStart: bounds.start,
+      periodEnd: bounds.end,
+      periodIncome,
+      committedBills,
+      savingsTarget,
+      safeToSpend: amount,
+      discretionarySpend: spent,
+      remaining: roundMoney(amount - spent),
+      observed: (transactions || []).some(
+        (tx) => !tx.duplicateOf && inBounds(tx.date, bounds)
+      )
+    };
+  }
+
+  function leftoverForPeriod(budget) {
+    return roundMoney(
+      Math.max(
+        0,
+        (Number(budget?.safeToSpend) || 0) -
+          (Number(budget?.discretionarySpend) || 0)
+      )
+    );
+  }
+
+  function rolloverPeriod(completedBudget, nextInputs, options = {}) {
+    const leftover = leftoverForPeriod(completedBudget);
+    const goal = options.goal || "active savings goal";
+    const next = safeToSpend(
+      nextInputs?.periodIncome,
+      nextInputs?.committedBills,
+      nextInputs?.savingsTarget
+    );
+    return {
+      leftover,
+      // Deliberately no carryover input: prior leftover can only become a sweep.
+      nextSafeToSpend: next,
+      sweepFlag:
+        leftover > 0
+          ? {
+              id: `budget-sweep:${completedBudget.periodStart || completedBudget.periodLabel}`,
+              trigger: "safe-to-spend leftover",
+              why: `$${leftover.toFixed(2)} stayed unspent last week`,
+              action: `sweep $${leftover.toFixed(2)} to ${goal}`,
+              dollarValue: leftover,
+              deadline: options.deadline || null,
+              confidence: 1
+            }
+          : null
+    };
+  }
+
+  function updateRatchet(state, completedBudget, config = CONFIG) {
+    const prior = Math.max(0, Number(state?.streak) || 0);
+    if (completedBudget?.observed === false) {
+      return { streak: 0, status: "insufficient-history", proposal: null };
+    }
+    const safe = Math.max(0, Number(completedBudget?.safeToSpend) || 0);
+    const spent = Math.max(0, Number(completedBudget?.discretionarySpend) || 0);
+    if (spent > safe) {
+      return { streak: prior, status: "paused", proposal: null };
+    }
+    const underspent = spent < safe * (1 - config.RATCHET_MARGIN);
+    const streak = underspent ? prior + 1 : 0;
+    const savingsTarget = Math.max(0, Number(state?.savingsTarget) || 0);
+    const proposal =
+      underspent && streak >= config.RATCHET_STREAK_N
+        ? {
+            id: `budget-ratchet:${completedBudget.periodStart || completedBudget.periodLabel}`,
+            trigger: "underspend streak",
+            why: `${streak} weeks with room left`,
+            action: `save $${config.RATCHET_STEP.toFixed(2)} more per week`,
+            dollarValue: config.RATCHET_STEP,
+            deadline: null,
+            confidence: 0.9,
+            nextSavingsTarget: roundMoney(savingsTarget + config.RATCHET_STEP)
+          }
+        : null;
+    return { streak, status: proposal ? "proposed" : underspent ? "building" : "steady", proposal };
+  }
+
+  function acceptRatchet(savingsTarget, config = CONFIG) {
+    return roundMoney(
+      Math.max(0, Number(savingsTarget) || 0) + Number(config.RATCHET_STEP)
+    );
+  }
+
+  function categoryTotals(snapshot, transactions, bounds) {
+    const totals = {};
+    discretionaryTransactions(snapshot, transactions, bounds).forEach((tx) => {
+      const category = tx.category || "uncategorized";
+      totals[category] = roundMoney((totals[category] || 0) + Number(tx.amount));
+    });
+    return totals;
+  }
+
+  function categoryDiagnostics(snapshot, transactions, options = {}) {
+    const asOfDate = options.asOfDate || snapshot?.asOfDate;
+    if (!asOfDate) throw new Error("categoryDiagnostics requires asOfDate");
+    const historyPeriods = Math.max(1, Number(options.historyPeriods) || ROLLING_PERIODS);
+    const currentBounds = weekBounds(asOfDate);
+    const current = categoryTotals(snapshot, transactions, currentBounds);
+    const history = [];
+    for (let offset = -historyPeriods; offset < 0; offset += 1) {
+      history.push(categoryTotals(snapshot, transactions, weekBounds(asOfDate, offset)));
+    }
+    const categories = new Set(Object.keys(current));
+    history.forEach((period) => Object.keys(period).forEach((name) => categories.add(name)));
+    const rows = [...categories]
+      .map((category) => {
+        const samples = history.map((period) => Number(period[category]) || 0);
+        const activePeriods = samples.filter((amount) => amount > 0).length;
+        const average = roundMoney(
+          samples.reduce((sum, amount) => sum + amount, 0) / historyPeriods
+        );
+        const amount = roundMoney(current[category] || 0);
+        const overage = roundMoney(Math.max(0, amount - average));
+        const ratio = average > 0 ? amount / average - 1 : 0;
+        return {
+          category,
+          amount,
+          rollingAverage: average,
+          overage,
+          ratio,
+          historyPeriods,
+          activeHistoryPeriods: activePeriods
+        };
+      })
+      .filter((row) => row.amount > 0)
+      .sort((left, right) => right.amount - left.amount || left.category.localeCompare(right.category));
+
+    const biggestLeak = rows
+      .filter(
+        (row) =>
+          row.rollingAverage > 0 &&
+          row.ratio >= (options.leakThreshold ?? LEAK_THRESHOLD)
+      )
+      .sort((left, right) => right.overage - left.overage || right.ratio - left.ratio)[0];
+    const leakFlag = biggestLeak
+      ? {
+          id: `budget-leak:${currentBounds.start}:${biggestLeak.category}`,
+          trigger: "category over baseline",
+          why: `${biggestLeak.category} $${biggestLeak.amount.toFixed(2)} vs usual $${biggestLeak.rollingAverage.toFixed(2)}`,
+          action: "cut here",
+          dollarValue: biggestLeak.overage,
+          deadline: currentBounds.end,
+          confidence: Math.min(
+            1,
+            roundMoney(0.25 + 0.75 * (biggestLeak.activeHistoryPeriods / historyPeriods))
+          )
+        }
+      : null;
+
+    const declined = new Set(options.declinedCategories || []);
+    const envelopeSuggestions = rows
+      .filter((row) => !declined.has(row.category))
+      .sort(
+        (left, right) =>
+          right.amount - left.amount || right.ratio - left.ratio
+      )
+      .slice(0, 3)
+      .map((row) => ({
+        category: row.category,
+        suggestedLimit: roundMoney(Math.max(row.rollingAverage, row.amount - row.overage)),
+        currentSpend: row.amount,
+        rollingAverage: row.rollingAverage
+      }));
+
+    return { period: currentBounds.label, categories: rows, leakFlag, envelopeSuggestions };
+  }
+
+  function spendPause(transaction, remaining, options = {}) {
+    const amount = Math.max(0, Number(transaction?.amount) || 0);
+    if (!isExpense(transaction) || options.committed || amount < PAUSE_THRESHOLD) {
+      return { required: false, cooldownOffered: false };
+    }
+    const after = roundMoney((Number(remaining) || 0) - amount);
+    return {
+      required: true,
+      message: `$${after.toFixed(2)} left this week — still in?`,
+      cooldownOffered: amount >= COOLDOWN_THRESHOLD,
+      revisitDate:
+        amount >= COOLDOWN_THRESHOLD
+          ? isoDate(addDays(parseDate(options.asOfDate || transaction.date), 1))
+          : null
+    };
+  }
+
+  return {
+    CONFIG,
+    PERIOD,
+    PAUSE_THRESHOLD,
+    COOLDOWN_THRESHOLD,
+    RATCHET_STREAK_N,
+    RATCHET_MARGIN,
+    RATCHET_STEP,
+    LEAK_THRESHOLD,
+    weekBounds,
+    discretionaryTransactions,
+    periodIncomeFromSnapshot,
+    committedBillsFromSnapshot,
+    initializeSavingsTarget,
+    safeToSpend,
+    computeBudget,
+    leftoverForPeriod,
+    rolloverPeriod,
+    updateRatchet,
+    acceptRatchet,
+    categoryDiagnostics,
+    spendPause
+  };
+});
+
+  </script>
+  <script type="text/plain" id="src-model">
+(function (root, factory) {
+  const budget =
+    typeof module === "object" && module.exports
+      ? require("./budget.js")
+      : root.MoneyBudget;
+  const api = factory(budget);
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.MoneyModel = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function (Budget) {
+  "use strict";
+
+  // Bump when snapshot math / recurring rules change so clients invalidate caches.
+  const ENGINE_VERSION = 8;
 
   // Live hub snapshots must supply openings/types from the account registry.
   // Demo openings live only in tests / mock-shelf — never silently merge here.
   const DEFAULT_CONFIG = {
     asOfDate: null,
     weeklySavingsTarget: 300,
+    checkingReserve: 1000,
     bills: [],
     openingBalances: {},
-    accountTypes: {}
+    accountTypes: {},
+    accountLabels: {},
+    accounts: [],
+    incomeStreamOverrides: {},
+    reportedBalances: {}
   };
 
   /** Offline/sample fixture only — not applied unless a caller passes it in. */
@@ -1560,9 +2331,15 @@
     const raw = merchantKey(merchant);
     if (direction === "in") return raw;
     return raw
+      // Strip bank/POS wrappers so "DEBITCARD … GOOGLE STORAGE" groups cleanly.
+      .replace(/\b(debitcard|pos|purchase|withdrawal|ach|checkcard|visa|mastercard)\b/g, " ")
+      .replace(/\b\d{4}\b/g, " ") // card last4 / store codes often 4 digits
+      .replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g, " ") // embedded mm/dd/yy
+      .replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, " ") // times
       .replace(new RegExp(`\\b(${MONTH_NAMES})\\b`, "g"), " ")
       .replace(/\b(20)?\d{2}\b/g, " ")
       .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
       .trim() || raw;
   }
 
@@ -1574,27 +2351,259 @@
       : (sorted[middle - 1] + sorted[middle]) / 2;
   }
 
-  function amountsAreSimilar(left, right) {
-    return Math.abs(left - right) <= Math.max(2, Math.max(left, right) * 0.05);
+  function amountsAreSimilar(left, right, slack = 0.03) {
+    const floor = slack >= 0.1 ? 5 : 1;
+    return Math.abs(left - right) <= Math.max(floor, Math.max(left, right) * slack);
   }
 
   function cadenceFromGaps(gaps) {
     if (!gaps.length) return null;
     const mid = median(gaps);
-    if (mid >= 5 && mid <= 9) return { days: Math.round(mid), label: "weekly" };
-    if (mid >= 12 && mid <= 17) return { days: Math.round(mid), label: "biweekly" };
-    if (mid >= 25 && mid <= 36) return { days: Math.round(mid), label: "monthly" };
-    if (mid >= 55 && mid <= 75) return { days: Math.round(mid), label: "bimonthly" };
+    if (mid >= 6 && mid <= 8) return { days: Math.round(mid), label: "weekly" };
+    if (mid >= 13 && mid <= 16) return { days: Math.round(mid), label: "biweekly" };
+    // Slightly wide monthly band — rent/ACH often posts a few days late.
+    if (mid >= 26 && mid <= 38) return { days: Math.round(mid), label: "monthly" };
+    if (mid >= 55 && mid <= 70) return { days: Math.round(mid), label: "bimonthly" };
     return null;
   }
 
-  function detectRecurringStreams(transactions, direction) {
+  function gapsAreConsistent(gaps, cadence) {
+    if (!cadence || !gaps.length) return false;
+    // Allow a little drift: each gap must still classify as the same label.
+    return gaps.every((gap) => cadenceFromGaps([gap])?.label === cadence.label);
+  }
+
+  function looksLikeBillMerchant(merchant) {
+    const text = String(merchant || "").toLowerCase();
+    return (
+      /\bach\b/.test(text) ||
+      /\b(comcast|xfinity|comed|utilities?|insurance|rent|lease|spotify|netflix|hulu|nyt|nytimes|openai|anthropic|chatgpt|cursor|subscription|membership|premium|versaille)\b/.test(
+        text
+      )
+    );
+  }
+
+  const RECURRING_NOISE_CATEGORIES = new Set([
+    "dining",
+    "entertainment",
+    "fees",
+    "shopping",
+    "groceries"
+  ]);
+
+  const BILL_CATEGORIES = new Set([
+    "housing",
+    "utilities",
+    "subscriptions",
+    "health",
+    "income"
+  ]);
+
+  function looksLikeP2pMerchant(merchant) {
+    return /\b(zelle|venmo|paypal|cash\s*app|cashapp)\b/i.test(String(merchant || ""));
+  }
+
+  function incomeFreshnessLimitDays(cadenceLabel, cadenceDays) {
+    if (cadenceLabel === "weekly") return 21;
+    if (cadenceLabel === "biweekly") return 45;
+    if (cadenceLabel === "monthly") return 75;
+    if (cadenceLabel === "bimonthly") return 120;
+    const days = Number(cadenceDays) || 30;
+    return Math.max(45, Math.round(days * 2.5));
+  }
+
+  function nextExpectedFromStream(stream, asOfDate) {
+    const cadence = Number(stream.cadenceDays) || 0;
+    if (!cadence || !stream.lastDate) return null;
+    let cursor = parseDate(stream.lastDate);
+    const asOf = parseDate(asOfDate);
+    let guard = 0;
+    while (cursor <= asOf && guard < 36) {
+      cursor = addDays(cursor, cadence);
+      guard += 1;
+    }
+    if (cursor <= asOf) return null;
+    return toDateString(cursor);
+  }
+
+  function normalizeIncomeOverrides(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    Object.entries(raw).forEach(([key, value]) => {
+      const normalizedKey = String(key || "")
+        .trim()
+        .toLowerCase();
+      if (!normalizedKey) return;
+      if (value == null) return;
+      if (typeof value === "string") {
+        out[normalizedKey] = { status: value };
+        return;
+      }
+      if (value && typeof value === "object" && value.status) {
+        out[normalizedKey] = { status: String(value.status) };
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Income streams: same merchant + same day deposits are one event (so
+   * $1500+$1900 Zelle counts as $3400), then cadence runs on day totals.
+   */
+  function detectIncomeStreams(transactions, options = {}) {
+    const asOfDate = options.asOfDate || todayIso();
+    const overrides = normalizeIncomeOverrides(options.incomeStreamOverrides);
+    const groups = new Map();
+    transactions
+      .filter((tx) => tx.direction === "in" && Number.isFinite(tx.amount))
+      .forEach((tx) => {
+        const key = streamKey(tx.merchant, "in");
+        if (!key || key.length < 4) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(tx);
+      });
+
+    const streams = [];
+    groups.forEach((items, key) => {
+      const dayMap = new Map();
+      items.forEach((tx) => {
+        const day = dayMap.get(tx.date) || {
+          date: tx.date,
+          amount: 0,
+          txs: [],
+          merchant: tx.merchant,
+          category: tx.category || ""
+        };
+        day.amount = roundMoney(day.amount + tx.amount);
+        day.txs.push(tx);
+        if (tx.category) day.category = tx.category;
+        dayMap.set(tx.date, day);
+      });
+      const days = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+      if (days.length < 2) return;
+
+      const amountSlack = 0.15;
+      const used = new Set();
+      for (let seedIndex = 0; seedIndex < days.length; seedIndex += 1) {
+        const seed = days[seedIndex];
+        if (used.has(seed.date)) continue;
+        const cluster = days.filter((day) =>
+          amountsAreSimilar(day.amount, seed.amount, amountSlack)
+        );
+        if (cluster.length < 2) continue;
+
+        const gaps = [];
+        for (let index = 1; index < cluster.length; index += 1) {
+          gaps.push(daysBetween(cluster[index - 1].date, cluster[index].date));
+        }
+        const labeled = gaps
+          .map((gap) => ({ gap, label: cadenceFromGaps([gap])?.label || null }))
+          .filter((row) => row.label);
+        if (labeled.length < 1) continue;
+        const labelCounts = labeled.reduce((map, row) => {
+          map[row.label] = (map[row.label] || 0) + 1;
+          return map;
+        }, {});
+        const dominantLabel = Object.entries(labelCounts).sort(
+          (left, right) => right[1] - left[1]
+        )[0][0];
+        const dominantGaps = labeled
+          .filter((row) => row.label === dominantLabel)
+          .map((row) => row.gap);
+        if (dominantGaps.length < Math.ceil(gaps.length * 0.5)) continue;
+        const cadence = cadenceFromGaps(dominantGaps);
+        if (!cadence || cadence.label !== dominantLabel) continue;
+        if (!gapsAreConsistent(dominantGaps, cadence)) continue;
+
+        cluster.forEach((day) => used.add(day.date));
+        const last = cluster[cluster.length - 1];
+        const amount = roundMoney(median(cluster.map((day) => day.amount)));
+        const age = daysBetween(last.date, asOfDate);
+        const freshLimit = incomeFreshnessLimitDays(cadence.label, cadence.days);
+        const override = overrides[key];
+        let status = "observed";
+        let confidence = "medium";
+        let active = true;
+        if (override?.status === "ignored") {
+          status = "ignored";
+          confidence = "none";
+          active = false;
+        } else if (override?.status === "confirmed") {
+          status = "confirmed";
+          confidence = "high";
+          active = age <= Math.max(freshLimit * 2, freshLimit + 60);
+        } else if (age > freshLimit) {
+          status = "stale";
+          confidence = "low";
+          active = false;
+        } else if (looksLikeP2pMerchant(key) || looksLikeP2pMerchant(last.merchant)) {
+          status = "observed";
+          confidence = "medium";
+          // P2P needs explicit confirm before it drives the cash horizon.
+          active = true;
+        }
+
+        const nextExpected = nextExpectedFromStream(
+          { lastDate: last.date, cadenceDays: cadence.days },
+          asOfDate
+        );
+        streams.push({
+          merchant: cluster[0].merchant,
+          key,
+          direction: "in",
+          category: last.category || "",
+          amount,
+          cadenceDays: cadence.days,
+          cadenceLabel: cadence.label,
+          lastDate: last.date,
+          occurrences: cluster.length,
+          transactionIds: cluster.flatMap((day) => day.txs.map((tx) => tx.id)),
+          status,
+          confidence,
+          active,
+          nextExpected,
+          projects: false,
+          drivesHorizon: status === "confirmed" && Boolean(nextExpected)
+        });
+      }
+    });
+
+    const byKey = new Map();
+    streams.forEach((stream) => {
+      const prior = byKey.get(stream.key);
+      if (
+        !prior ||
+        (stream.status === "confirmed" && prior.status !== "confirmed") ||
+        (stream.status === prior.status &&
+          (stream.occurrences > prior.occurrences ||
+            (stream.occurrences === prior.occurrences &&
+              stream.lastDate > prior.lastDate)))
+      ) {
+        byKey.set(stream.key, stream);
+      }
+    });
+    return [...byKey.values()].sort((a, b) => b.amount - a.amount);
+  }
+
+  /**
+   * Detect recurring income/expense streams.
+   * Tuned to ignore coincidental cafe/POS visits from long bank CSV history:
+   * cluster by similar amount, require consistent cadence, enough hits, and
+   * preferably bill-like merchants (or a recent last charge).
+   * Blank / uncategorized outs still group — monthly bill-sized streams qualify.
+   */
+  function detectRecurringStreams(transactions, direction, options = {}) {
+    if (direction === "in") {
+      return detectIncomeStreams(transactions, options);
+    }
+    const asOfDate = options.asOfDate || null;
+    const maxAgeDays = Number.isFinite(options.maxAgeDays) ? options.maxAgeDays : 150;
     const groups = new Map();
     transactions
       .filter((tx) => tx.direction === direction && Number.isFinite(tx.amount))
       .forEach((tx) => {
-        if (direction === "out" && !tx.category) return;
         const key = streamKey(tx.merchant, direction);
+        if (!key || key.length < 4) return;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(tx);
       });
@@ -1602,27 +2611,95 @@
     const streams = [];
     groups.forEach((items, key) => {
       const sorted = [...items].sort((a, b) => a.date.localeCompare(b.date));
-      const matching = [];
-      const gaps = [];
-      for (let index = 1; index < sorted.length; index += 1) {
-        const days = daysBetween(sorted[index - 1].date, sorted[index].date);
-        if (amountsAreSimilar(sorted[index].amount, sorted[index - 1].amount)) {
-          const cadence = cadenceFromGaps([days]);
-          if (cadence) {
-            matching.push(sorted[index - 1], sorted[index]);
-            gaps.push(days);
-          }
+      const billLikeSeed =
+        looksLikeBillMerchant(sorted[0].merchant) || looksLikeBillMerchant(key);
+      const amountSlack = billLikeSeed ? 0.15 : 0.03;
+
+      // Greedy amount clusters — pick peers of each seed amount.
+      const used = new Set();
+      for (let seedIndex = 0; seedIndex < sorted.length; seedIndex += 1) {
+        const seed = sorted[seedIndex];
+        if (used.has(seed.id)) continue;
+        const cluster = sorted.filter((tx) =>
+          amountsAreSimilar(tx.amount, seed.amount, amountSlack)
+        );
+        if (cluster.length < 2) continue;
+
+        const gaps = [];
+        for (let index = 1; index < cluster.length; index += 1) {
+          gaps.push(daysBetween(cluster[index - 1].date, cluster[index].date));
         }
-      }
-      const unique = [...new Map(matching.map((item) => [item.id, item])).values()];
-      const cadence = cadenceFromGaps(gaps);
-      if (unique.length >= 2 && cadence) {
+        // Keep only cadence-shaped consecutive gaps; drop holiday/skip outliers
+        // by requiring a majority of gaps to share one cadence label.
+        const labeled = gaps
+          .map((gap) => ({ gap, label: cadenceFromGaps([gap])?.label || null }))
+          .filter((row) => row.label);
+        if (labeled.length < 1) continue;
+        const labelCounts = labeled.reduce((map, row) => {
+          map[row.label] = (map[row.label] || 0) + 1;
+          return map;
+        }, {});
+        const dominantLabel = Object.entries(labelCounts).sort(
+          (left, right) => right[1] - left[1]
+        )[0][0];
+        const dominantGaps = labeled
+          .filter((row) => row.label === dominantLabel)
+          .map((row) => row.gap);
+        if (dominantGaps.length < (direction === "in" ? 1 : 1)) continue;
+        // Need at least half of inter-arrival gaps to agree (rent can slip once).
+        if (dominantGaps.length < Math.ceil(gaps.length * 0.5)) continue;
+
+        const cadence = cadenceFromGaps(dominantGaps);
+        if (!cadence || cadence.label !== dominantLabel) continue;
+        if (!gapsAreConsistent(dominantGaps, cadence)) continue;
+
+        const unique = cluster;
+        unique.forEach((tx) => used.add(tx.id));
         const last = unique[unique.length - 1];
+        const category = last.category || "";
+        const amount = roundMoney(median(unique.map((item) => item.amount)));
+        const monthlyCadence =
+          cadence.label === "monthly" || cadence.label === "bimonthly";
+        const uncategorizedBillSized =
+          direction === "out" &&
+          (!category || category === "uncategorized") &&
+          monthlyCadence &&
+          amount >= 40;
+        const billLike =
+          billLikeSeed ||
+          BILL_CATEGORIES.has(category) ||
+          uncategorizedBillSized;
+
+        const noisy =
+          direction === "out" &&
+          !billLike &&
+          RECURRING_NOISE_CATEGORIES.has(category || "uncategorized");
+
+        const minHits = billLike
+          ? monthlyCadence
+            ? 2
+            : 3
+          : noisy
+            ? 4
+            : 3;
+
+        if (unique.length < minHits) continue;
+
+        // Bill-like streams may be slightly older; discretionary must be recent.
+        if (asOfDate && direction === "out") {
+          const age = daysBetween(last.date, asOfDate);
+          const ageLimit = billLike ? Math.max(maxAgeDays, 180) : maxAgeDays;
+          if (age > ageLimit) continue;
+        }
+
+        if (direction === "out" && amount < 5 && !billLike) continue;
+
         streams.push({
           merchant: unique[0].merchant,
           key,
           direction,
-          amount: roundMoney(median(unique.map((item) => item.amount))),
+          category: category || "",
+          amount,
           cadenceDays: cadence.days,
           cadenceLabel: cadence.label,
           lastDate: last.date,
@@ -1631,13 +2708,27 @@
         });
       }
     });
-    return streams.sort((a, b) => b.amount - a.amount);
+
+    // One stream per merchant key — keep the strongest recent cluster.
+    const byKey = new Map();
+    streams.forEach((stream) => {
+      const prior = byKey.get(stream.key);
+      if (
+        !prior ||
+        stream.occurrences > prior.occurrences ||
+        (stream.occurrences === prior.occurrences && stream.lastDate > prior.lastDate)
+      ) {
+        byKey.set(stream.key, stream);
+      }
+    });
+    return [...byKey.values()].sort((a, b) => b.amount - a.amount);
   }
 
-  function detectRecurring(transactions) {
-    return detectRecurringStreams(transactions, "out").map((stream) => ({
+  function detectRecurring(transactions, options = {}) {
+    return detectRecurringStreams(transactions, "out", options).map((stream) => ({
       merchant: stream.merchant,
       key: stream.key,
+      category: stream.category || "",
       amount: stream.amount,
       occurrences: stream.occurrences,
       transactionIds: stream.transactionIds,
@@ -1848,11 +2939,18 @@
         split
       };
     }
+    // Credit-card ledger can go negative when bank payment transfers are
+    // double-counted; don't let that inflate net worth. External "owed"
+    // reimbursements may legitimately go negative after repayments.
+    const rawLiability =
+      type === "liability" || type === "external" ? Number(balance) || 0 : 0;
+    const liabilities =
+      type === "liability" ? Math.max(0, rawLiability) : rawLiability;
     return {
       liquid: type === "cash" ? balance : 0,
       invested: type === "investment" ? balance : 0,
-      liabilities: type === "liability" || type === "external" ? balance : 0,
-      owed: type === "external" ? balance : 0,
+      liabilities,
+      owed: type === "external" ? rawLiability : 0,
       split: null
     };
   }
@@ -1865,57 +2963,291 @@
     return accountType === "liability" || accountType === "external" ? -amount : amount;
   }
 
-  function computeSafeToSpend(effectiveTransactions, config) {
-    const incomeStreams = detectRecurringStreams(effectiveTransactions, "in");
-    const expenseStreams = detectRecurringStreams(effectiveTransactions, "out");
-    const { start, end, source, nextPayday } = payPeriodBounds(
-      incomeStreams,
-      config.asOfDate
-    );
+  function amountToWeekly(amount, cadenceLabel, cadenceDays) {
+    const value = Number(amount) || 0;
+    if (!value) return 0;
+    if (cadenceLabel === "weekly" || cadenceDays === 7) return value;
+    if (
+      cadenceLabel === "biweekly" ||
+      (cadenceDays >= 12 && cadenceDays <= 16)
+    ) {
+      return value * (7 / 14);
+    }
+    if (cadenceLabel === "bimonthly") return value * (7 / 60.875);
+    const days =
+      Number(cadenceDays) > 16 ? Number(cadenceDays) : 30.4375;
+    return value * (7 / days);
+  }
+
+  function pickCheckingAccountId(config) {
+    const types = config.accountTypes || {};
+    const labels = config.accountLabels || {};
+    const cashIds = Object.keys(types).filter((id) => types[id] === "cash");
+    if (!cashIds.length) return null;
+    const byName = cashIds.find((id) => {
+      const label = String(labels[id] || "");
+      return /check/i.test(id) || /check/i.test(label);
+    });
+    if (byName) return byName;
+    const nonSavings = cashIds.filter((id) => {
+      const label = String(labels[id] || "");
+      return !/sav|money\s*market|\bmm\b|vanguard/i.test(id) &&
+        !/sav|money\s*market|\bmm\b/i.test(label);
+    });
+    return nonSavings[0] || cashIds[0];
+  }
+
+  function pickSavingsAccountIds(config) {
+    const types = config.accountTypes || {};
+    const labels = config.accountLabels || {};
+    return Object.keys(types).filter((id) => {
+      if (types[id] !== "cash") return false;
+      const label = String(labels[id] || "");
+      return /sav/i.test(id) || /sav/i.test(label);
+    });
+  }
+
+  function obligationAlreadyPaid(transactions, title, amount, dueDate, asOfDate) {
+    const due = parseDate(dueDate);
+    const windowStart = addDays(due, -10);
+    const windowEnd = addDays(due, 5);
+    const asOf = parseDate(asOfDate);
+    const end = windowEnd < asOf ? windowEnd : addDays(asOf, 1);
+    const needle = streamKey(title, "out");
+    return transactions.some((tx) => {
+      if (tx.direction !== "out" || tx.duplicateOf) return false;
+      if (!Number.isFinite(tx.amount)) return false;
+      const at = parseDate(tx.date);
+      if (at < windowStart || at >= end) return false;
+      if (!amountsAreSimilar(tx.amount, amount, 0.1)) return false;
+      const key = streamKey(tx.merchant, "out");
+      if (!needle) return true;
+      if (key.includes(needle) || needle.includes(key)) return true;
+      // Rent / housing title vs Versailles ACH etc.
+      if (/\brent\b/.test(needle) && /versailles|oakbr|housing|\brent\b/.test(key)) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  function savingsTransferredInRange(transactions, config, start, end) {
+    const checkingId = pickCheckingAccountId(config);
+    const savingsIds = new Set(pickSavingsAccountIds(config));
+    if (!checkingId || !savingsIds.size) return 0;
+    return transactions
+      .filter((tx) => {
+        if (tx.duplicateOf) return false;
+        if (!isInRange(tx.date, start, end)) return false;
+        if (tx.direction === "transfer") {
+          const target = tx.transferAccount || tx.suggestedTransferAccount;
+          return tx.account === checkingId && savingsIds.has(target);
+        }
+        // Some imports label savings moves as out + category.
+        if (
+          tx.direction === "out" &&
+          tx.account === checkingId &&
+          /transfer to savings|savings transfer/i.test(tx.merchant || "")
+        ) {
+          return true;
+        }
+        return false;
+      })
+      .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+  }
+
+  function cardObligationsThrough(config, horizonEndIso, asOfDate) {
+    const accounts = Array.isArray(config.accounts) ? config.accounts : [];
+    const asOf = asOfDate || config.asOfDate;
+    return accounts
+      .filter(
+        (account) =>
+          account &&
+          account.type === "liability" &&
+          account.id !== "outside-payments"
+      )
+      .map((account) => {
+        const dueDay = Number(account.dueDay) || 27;
+        let nextDue = dateWithDay(asOf, dueDay, 0);
+        if (nextDue <= parseDate(asOf)) {
+          nextDue = dateWithDay(asOf, dueDay, 1);
+        }
+        const nextDueIso = toDateString(nextDue);
+        if (nextDueIso > horizonEndIso) return null;
+        const balance =
+          account.reportedBalance != null
+            ? Number(account.reportedBalance)
+            : Number(config.reportedBalances?.[account.id]);
+        const amount = Number.isFinite(balance) ? Math.max(0, balance) : 0;
+        if (amount <= 0) return null;
+        return {
+          title: `${account.label || account.id} card payment`,
+          amount: roundMoney(amount),
+          date: nextDueIso,
+          source: "card",
+          cadenceLabel: "once",
+          fullAmount: roundMoney(amount)
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function computeSafeToSpend(effectiveTransactions, config, balances, balanceSources) {
+    const overrides = normalizeIncomeOverrides(config.incomeStreamOverrides);
+    const incomeStreams = detectRecurringStreams(effectiveTransactions, "in", {
+      asOfDate: config.asOfDate,
+      incomeStreamOverrides: overrides
+    });
+    const expenseStreams = detectRecurringStreams(effectiveTransactions, "out", {
+      asOfDate: config.asOfDate,
+      maxAgeDays: 120
+    });
+
+    const week = weekBounds(config.asOfDate);
     const asOf = parseDate(config.asOfDate);
-    const horizonEnd = end < asOf ? addDays(asOf, 7) : end;
-    const periodStart = start;
-    const periodEnd = horizonEnd;
+    const periodStart = week.start;
+    const periodEnd = week.end;
 
-    const incomeReceived = effectiveTransactions
-      .filter((tx) => tx.direction === "in" && isInRange(tx.date, periodStart, addDays(asOf, 1)))
-      .reduce((sum, tx) => sum + tx.amount, 0);
+    const confirmed = incomeStreams.filter((stream) => stream.drivesHorizon);
+    const activeExpected = incomeStreams.filter(
+      (stream) =>
+        stream.active &&
+        (stream.status === "confirmed" || stream.status === "observed")
+    );
+    const nextPayday =
+      confirmed
+        .map((stream) => stream.nextExpected)
+        .filter(Boolean)
+        .sort()[0] || null;
 
-    const incomeExpected = incomeStreams.reduce((sum, stream) => {
-      return (
-        sum +
-        occurrencesInPeriod(stream, addDays(asOf, 1), periodEnd).length * stream.amount
-      );
-    }, 0);
+    let horizonEnd;
+    let horizonSource;
+    if (nextPayday) {
+      horizonEnd = parseDate(nextPayday);
+      horizonSource = "confirmed-income";
+    } else {
+      horizonEnd = addDays(asOf, 28);
+      horizonSource = "default-4-weeks";
+    }
+    const horizonEndIso = toDateString(horizonEnd);
+    const allocationDays = Math.max(1, daysBetween(config.asOfDate, horizonEndIso));
+    const allocationWeeks = Math.max(1, roundMoney(allocationDays / 7));
 
-    const periodIncome = incomeReceived + incomeExpected;
+    const checkingAccountId = pickCheckingAccountId(config);
+    const checkingBalance = checkingAccountId
+      ? Number(balances?.[checkingAccountId]) || 0
+      : 0;
+    const balanceSource = checkingAccountId
+      ? balanceSources?.[checkingAccountId] || "ledger"
+      : "none";
+    const reserve = Math.max(0, Number(config.checkingReserve) || 0);
+    const availableAfterReserve = roundMoney(checkingBalance - reserve);
 
-    const recurringKeys = new Set(expenseStreams.map((stream) => stream.key));
     const commitmentRows = [];
-
+    // Recurring expense occurrences unpaid through the cash horizon.
     expenseStreams.forEach((stream) => {
-      occurrencesInPeriod(stream, periodStart, periodEnd).forEach((date) => {
-        commitmentRows.push({
-          title: stream.merchant,
-          amount: stream.amount,
-          date,
-          source: "recurring"
-        });
+      occurrencesInPeriod(stream, addDays(asOf, 1), addDays(horizonEnd, 1)).forEach(
+        (date) => {
+          if (
+            obligationAlreadyPaid(
+              effectiveTransactions,
+              stream.merchant,
+              stream.amount,
+              date,
+              config.asOfDate
+            )
+          ) {
+            return;
+          }
+          commitmentRows.push({
+            title: stream.merchant,
+            amount: stream.amount,
+            date,
+            source: "recurring",
+            cadenceLabel: stream.cadenceLabel || "monthly",
+            fullAmount: stream.amount
+          });
+        }
+      );
+    });
+
+    billDueDatesInPeriod(
+      config.bills,
+      addDays(asOf, 1),
+      addDays(horizonEnd, 1)
+    ).forEach((due) => {
+      const duplicate = commitmentRows.some((row) => {
+        if (amountsAreSimilar(row.amount, due.amount, 0.1)) return true;
+        const billTitle = String(due.title || "").toLowerCase();
+        const streamTitle = String(row.title || "").toLowerCase();
+        if (
+          /\brent\b/.test(billTitle) &&
+          (/versailles|oakbr|\brent\b|housing/.test(streamTitle) ||
+            amountsAreSimilar(row.amount, due.amount, 0.15))
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (duplicate) return;
+      if (
+        obligationAlreadyPaid(
+          effectiveTransactions,
+          due.title,
+          due.amount,
+          due.date,
+          config.asOfDate
+        )
+      ) {
+        return;
+      }
+      commitmentRows.push({
+        title: due.title,
+        amount: due.amount,
+        date: due.date,
+        source: "bill",
+        cadenceLabel: "monthly",
+        fullAmount: due.amount
       });
     });
 
-    billDueDatesInPeriod(config.bills, periodStart, periodEnd).forEach((due) => {
-      // Skip bills that already match a detected recurring stream by amount+near date.
+    cardObligationsThrough(config, horizonEndIso, config.asOfDate).forEach((row) => {
       const duplicate = commitmentRows.some(
+        (existing) =>
+          existing.source === "card" &&
+          existing.title === row.title &&
+          amountsAreSimilar(existing.amount, row.amount, 0.05)
+      );
+      if (!duplicate) commitmentRows.push(row);
+    });
+
+    const dueThisWeek = [];
+    expenseStreams.forEach((stream) => {
+      occurrencesInPeriod(stream, periodStart, periodEnd).forEach((date) => {
+        dueThisWeek.push({
+          title: stream.merchant,
+          amount: stream.amount,
+          date,
+          source: "due-this-week"
+        });
+      });
+    });
+    billDueDatesInPeriod(config.bills, periodStart, periodEnd).forEach((due) => {
+      const duplicate = dueThisWeek.some(
         (row) =>
           amountsAreSimilar(row.amount, due.amount) &&
           Math.abs(daysBetween(row.date, due.date)) <= 3
       );
-      if (!duplicate) commitmentRows.push(due);
+      if (!duplicate) {
+        dueThisWeek.push({ ...due, source: "due-this-week" });
+      }
     });
 
-    const committed = commitmentRows.reduce((sum, row) => sum + row.amount, 0);
-
+    const unpaidObligations = commitmentRows.reduce(
+      (sum, row) => sum + row.amount,
+      0
+    );
+    const recurringKeys = new Set(expenseStreams.map((stream) => stream.key));
     const variableAlreadySpent = effectiveTransactions
       .filter(
         (tx) =>
@@ -1925,36 +3257,170 @@
       )
       .reduce((sum, tx) => sum + tx.amount, 0);
 
-    const horizonDays = Math.max(
-      1,
-      Math.round((periodEnd.getTime() - periodStart.getTime()) / DAY_MS)
+    const weeklySavingsTarget = Number(config.weeklySavingsTarget) || 0;
+    const savingsNeeded = roundMoney(weeklySavingsTarget * allocationWeeks);
+    const savingsAlready = roundMoney(
+      savingsTransferredInRange(
+        effectiveTransactions,
+        config,
+        periodStart,
+        addDays(asOf, 1)
+      )
     );
-    const savingsTarget =
-      (Number(config.weeklySavingsTarget) || 0) * (horizonDays / 7);
+    const savingsRemaining = roundMoney(Math.max(0, savingsNeeded - savingsAlready));
 
-    const remaining =
-      periodIncome - committed - savingsTarget - variableAlreadySpent;
+    // Expected rhythm is informational only — never funds safe-to-spend.
+    const weeklyIncome = activeExpected.reduce(
+      (sum, stream) =>
+        sum + amountToWeekly(stream.amount, stream.cadenceLabel, stream.cadenceDays),
+      0
+    );
+
+    const streamTxIds = new Set(
+      incomeStreams.flatMap((stream) => stream.transactionIds || [])
+    );
+    const irregularIncome = effectiveTransactions
+      .filter((tx) => {
+        if (tx.direction !== "in" || !Number.isFinite(tx.amount)) return false;
+        if (tx.amount < 100) return false;
+        if (streamTxIds.has(tx.id)) return false;
+        const age = daysBetween(tx.date, config.asOfDate);
+        return age >= 0 && age <= 90;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount)
+      .slice(0, 8)
+      .map((tx) => ({
+        merchant: tx.merchant,
+        key: streamKey(tx.merchant, "in"),
+        amount: roundMoney(tx.amount),
+        lastDate: tx.date,
+        status: "irregular",
+        confidence: "low",
+        active: false,
+        nextExpected: null,
+        cadenceLabel: null,
+        cadenceDays: null,
+        occurrences: 1
+      }));
+
+    const incomeOutlook = [
+      ...incomeStreams.map((stream) => ({
+        merchant: stream.merchant,
+        key: stream.key,
+        amount: roundMoney(stream.amount),
+        cadenceLabel: stream.cadenceLabel,
+        cadenceDays: stream.cadenceDays,
+        lastDate: stream.lastDate,
+        nextExpected: stream.nextExpected,
+        occurrences: stream.occurrences,
+        status: stream.status,
+        confidence: stream.confidence,
+        active: stream.active,
+        weeklyShare: roundMoney(
+          amountToWeekly(stream.amount, stream.cadenceLabel, stream.cadenceDays)
+        ),
+        drivesHorizon: Boolean(stream.drivesHorizon)
+      })),
+      ...irregularIncome
+    ];
+
+    const pool = roundMoney(
+      availableAfterReserve - unpaidObligations - savingsRemaining
+    );
+    // Checking already reflects spending — do not subtract spent again.
+    const remaining = roundMoney(pool / allocationWeeks);
+
+    const assumptions = [];
+    if (horizonSource === "default-4-weeks") {
+      assumptions.push(
+        "No confirmed income date — allocating checking cash over 4 weeks"
+      );
+    } else {
+      assumptions.push(
+        `Allocating through confirmed income on ${nextPayday}`
+      );
+    }
+    if (balanceSource === "ledger") {
+      assumptions.push(
+        "Checking balance is ledger-derived (lower confidence than a live statement balance)"
+      );
+    } else if (balanceSource === "none") {
+      assumptions.push("No checking account found for cash-backed safe-to-spend");
+    }
+    assumptions.push(
+      "Only known unpaid bills/cards are reserved — missing obligations are not assumed"
+    );
+    assumptions.push(
+      "Expected income is shown separately and does not increase safe-to-spend until it posts"
+    );
+
+    const pay = payPeriodBounds(
+      confirmed.length ? confirmed : activeExpected,
+      config.asOfDate
+    );
 
     return {
       period: `${toDateString(periodStart)} / ${toDateString(addDays(periodEnd, -1))}`,
-      periodSource: source,
-      nextPayday,
-      horizonDays,
-      income: roundMoney(periodIncome),
-      incomeReceived: roundMoney(incomeReceived),
-      incomeExpected: roundMoney(incomeExpected),
-      // Back-compat for older shelf/phone payloads.
-      weeklyIncome: roundMoney(periodIncome),
-      committed: roundMoney(committed),
+      periodSource: "calendar-week",
+      fundingMode: "cash-backed",
+      nextPayday: nextPayday || pay.nextPayday,
+      horizonDays: allocationDays,
+      allocationWeeks,
+      horizonSource,
+      income: roundMoney(weeklyIncome),
+      incomeReceived: roundMoney(
+        effectiveTransactions
+          .filter(
+            (tx) =>
+              tx.direction === "in" &&
+              isInRange(tx.date, periodStart, addDays(asOf, 1))
+          )
+          .reduce((sum, tx) => sum + tx.amount, 0)
+      ),
+      incomeExpected: roundMoney(weeklyIncome),
+      weeklyIncome: roundMoney(weeklyIncome),
+      committed: roundMoney(unpaidObligations),
       commitments: commitmentRows
+        .sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount)
+        .map((row) => ({
+          title: row.title,
+          amount: roundMoney(row.amount),
+          date: row.date,
+          source: row.source,
+          cadenceLabel: row.cadenceLabel,
+          fullAmount:
+            row.fullAmount != null ? roundMoney(row.fullAmount) : undefined
+        })),
+      dueThisWeek: dueThisWeek
         .sort((a, b) => a.date.localeCompare(b.date))
         .map((row) => ({
           ...row,
           amount: roundMoney(row.amount)
         })),
-      savingsTarget: roundMoney(savingsTarget),
+      savingsTarget: roundMoney(weeklySavingsTarget),
+      savingsNeeded,
+      savingsAlready,
+      savingsRemaining,
       spent: roundMoney(variableAlreadySpent),
-      remaining: roundMoney(remaining),
+      remaining,
+      breakdown: {
+        checkingAccountId,
+        checkingBalance: roundMoney(checkingBalance),
+        balanceSource,
+        reserve: roundMoney(reserve),
+        availableAfterReserve,
+        unpaidObligations: roundMoney(unpaidObligations),
+        savingsNeeded,
+        savingsAlready,
+        savingsRemaining,
+        pool,
+        allocationWeeks,
+        allocationDays,
+        horizonEnd: horizonEndIso,
+        horizonSource
+      },
+      incomeOutlook,
+      assumptions,
       incomeStreams,
       expenseStreams
     };
@@ -2006,8 +3472,20 @@
       ...suppliedConfig,
       openingBalances: { ...(suppliedConfig?.openingBalances || {}) },
       accountTypes: { ...(suppliedConfig?.accountTypes || {}) },
+      reportedBalances: { ...(suppliedConfig?.reportedBalances || {}) },
+      accountLabels: { ...(suppliedConfig?.accountLabels || {}) },
+      incomeStreamOverrides: normalizeIncomeOverrides(
+        suppliedConfig?.incomeStreamOverrides
+      ),
+      accounts: Array.isArray(suppliedConfig?.accounts)
+        ? suppliedConfig.accounts
+        : DEFAULT_CONFIG.accounts,
       bills: suppliedConfig?.bills || DEFAULT_CONFIG.bills,
       asOfDate: suppliedConfig?.asOfDate || DEFAULT_CONFIG.asOfDate || todayIso(),
+      checkingReserve:
+        suppliedConfig?.checkingReserve != null
+          ? Number(suppliedConfig.checkingReserve)
+          : DEFAULT_CONFIG.checkingReserve,
       accountHoldings: { ...(suppliedConfig?.accountHoldings || {}) }
     };
     // Only registered accounts — never invent checking/savings/vanguard ghosts.
@@ -2067,7 +3545,21 @@
       }
     });
 
+    // Live feeds (SimpleFIN) or manual "current balance" win over ledger walk.
+    // Prevents UWCU→Amex payment transfers from warping the Amex balance.
+    const balanceSources = {};
+    Object.keys(balances).forEach((accountId) => {
+      balanceSources[accountId] = "ledger";
+    });
+    Object.entries(config.reportedBalances || {}).forEach(([accountId, value]) => {
+      if (accountId in balances && Number.isFinite(Number(value))) {
+        balances[accountId] = Number(value);
+        balanceSources[accountId] = "live";
+      }
+    });
+
     const holdingBreakdown = {};
+    const balanceWarnings = [];
     const totals = Object.entries(balances).reduce(
       (result, [account, balance]) => {
         const type = config.accountTypes[account];
@@ -2077,8 +3569,27 @@
           type,
           config.accountHoldings
         );
-        result.liquid += allocated.liquid;
-        result.invested += allocated.invested;
+        let liquidAdd = allocated.liquid;
+        let investedAdd = allocated.invested;
+        // Incomplete bank CSV history with opening $0 can reconstruct large
+        // negative cash and destroy net worth. Until a live/manual balance is
+        // set, don't let ledger-only cash go negative in totals.
+        if (
+          type === "cash" &&
+          balanceSources[account] === "ledger" &&
+          liquidAdd < 0
+        ) {
+          balanceWarnings.push({
+            accountId: account,
+            issue: "stale_ledger_negative",
+            ledgerBalance: roundMoney(balance),
+            message:
+              "Ledger balance is negative without a live/manual balance — excluded from liquid until you set the current balance"
+          });
+          liquidAdd = 0;
+        }
+        result.liquid += liquidAdd;
+        result.invested += investedAdd;
         result.liabilities += allocated.liabilities;
         result.owed += allocated.owed;
         if (allocated.split) {
@@ -2093,10 +3604,16 @@
       { liquid: 0, invested: 0, liabilities: 0, owed: 0 }
     );
 
-    const safe = computeSafeToSpend(effectiveTransactions, config);
+    const safe = computeSafeToSpend(
+      effectiveTransactions,
+      config,
+      balances,
+      balanceSources
+    );
     const recurring = safe.expenseStreams.map((stream) => ({
       merchant: stream.merchant,
       key: stream.key,
+      category: stream.category || "",
       amount: stream.amount,
       occurrences: stream.occurrences,
       transactionIds: stream.transactionIds,
@@ -2118,6 +3635,73 @@
     ).size;
     const avgMonthlyExpenses = monthsCovered ? expenses / monthsCovered : 0;
 
+    // Budget is deliberately separate from the cash-horizon safety rail above:
+    // weekly spendable is always income - committed bills - savings first.
+    const weeklyBudget = Budget.computeBudget(
+      {
+        asOfDate: config.asOfDate,
+        recurring,
+        safeToSpend: safe
+      },
+      effectiveTransactions,
+      {
+        periodIncome: safe.weeklyIncome,
+        committedBills: Budget.committedBillsFromSnapshot({
+          recurring,
+          safeToSpend: safe
+        }),
+        savingsTarget: config.weeklySavingsTarget
+      }
+    );
+    const categoryDiagnostics = Budget.categoryDiagnostics(
+      { asOfDate: config.asOfDate, recurring },
+      effectiveTransactions
+    );
+    const priorBudget = Budget.computeBudget(
+      {
+        asOfDate: config.asOfDate,
+        recurring,
+        safeToSpend: safe
+      },
+      effectiveTransactions,
+      {
+        periodOffset: -1,
+        periodIncome: safe.weeklyIncome,
+        committedBills: Budget.committedBillsFromSnapshot({ recurring }),
+        savingsTarget: config.weeklySavingsTarget
+      }
+    );
+    const rollover = Budget.rolloverPeriod(priorBudget, {
+      periodIncome: weeklyBudget.periodIncome,
+      committedBills: weeklyBudget.committedBills,
+      savingsTarget: weeklyBudget.savingsTarget
+    });
+    let ratchet = {
+      streak: 0,
+      savingsTarget: weeklyBudget.savingsTarget
+    };
+    for (let offset = -Budget.RATCHET_STREAK_N; offset < 0; offset += 1) {
+      const completed = Budget.computeBudget(
+        { asOfDate: config.asOfDate, recurring, safeToSpend: safe },
+        effectiveTransactions,
+        {
+          periodOffset: offset,
+          periodIncome: safe.weeklyIncome,
+          committedBills: Budget.committedBillsFromSnapshot({ recurring }),
+          savingsTarget: weeklyBudget.savingsTarget
+        }
+      );
+      ratchet = {
+        ...ratchet,
+        ...Budget.updateRatchet(ratchet, completed)
+      };
+    }
+    const budgetFlags = [
+      rollover.sweepFlag,
+      ratchet.proposal,
+      categoryDiagnostics.leakFlag
+    ].filter(Boolean);
+
     Object.keys(balances).forEach((key) => {
       balances[key] = roundMoney(balances[key]);
     });
@@ -2129,8 +3713,11 @@
     });
 
     return {
+      asOfDate: config.asOfDate,
       balances,
       holdingBreakdown,
+      balanceSources,
+      balanceWarnings,
       netWorth: roundMoney(totals.liquid + totals.invested - totals.liabilities),
       liquid: roundMoney(totals.liquid),
       invested: roundMoney(totals.invested),
@@ -2149,29 +3736,139 @@
       avgMonthlyExpenses: roundMoney(avgMonthlyExpenses),
       runwayMonths: avgMonthlyExpenses ? totals.liquid / avgMonthlyExpenses : 0,
       safeToSpend: {
-        period: safe.period,
+        period: weeklyBudget.periodLabel,
         periodSource: safe.periodSource,
+        fundingMode: "income-minus-commitments",
         nextPayday: safe.nextPayday,
         horizonDays: safe.horizonDays,
-        income: safe.income,
+        allocationWeeks: safe.allocationWeeks,
+        horizonSource: safe.horizonSource,
+        amount: weeklyBudget.safeToSpend,
+        income: weeklyBudget.periodIncome,
         incomeReceived: safe.incomeReceived,
         incomeExpected: safe.incomeExpected,
         weeklyIncome: safe.weeklyIncome,
-        committed: safe.committed,
+        committed: weeklyBudget.committedBills,
         commitments: safe.commitments,
-        savingsTarget: safe.savingsTarget,
-        spent: safe.spent,
-        remaining: safe.remaining
-      }
+        dueThisWeek: safe.dueThisWeek,
+        savingsTarget: weeklyBudget.savingsTarget,
+        savingsNeeded: safe.savingsNeeded,
+        savingsAlready: safe.savingsAlready,
+        savingsRemaining: safe.savingsRemaining,
+        spent: weeklyBudget.discretionarySpend,
+        remaining: weeklyBudget.remaining,
+        cashBackedRemaining: safe.remaining,
+        breakdown: {
+          ...safe.breakdown,
+          periodIncome: weeklyBudget.periodIncome,
+          committedBills: weeklyBudget.committedBills,
+          savingsTarget: weeklyBudget.savingsTarget,
+          safeToSpend: weeklyBudget.safeToSpend,
+          discretionarySpend: weeklyBudget.discretionarySpend,
+          cashBackedRemaining: safe.remaining
+        },
+        incomeOutlook: safe.incomeOutlook,
+        assumptions: [
+          "Savings is subtracted before spendable is shown",
+          "Unspent weekly safe-to-spend never carries into a later week",
+          ...safe.assumptions
+        ],
+        ratchet
+      },
+      categoryDiagnostics,
+      flags: budgetFlags
     };
+  }
+
+  function clampDay(year, monthIndex, day) {
+    const last = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+    return Math.min(Math.max(1, Number(day) || 1), last);
+  }
+
+  function dateWithDay(asOfDate, day, monthOffset) {
+    const base = parseDate(asOfDate);
+    const year = base.getUTCFullYear();
+    const month = base.getUTCMonth() + (monthOffset || 0);
+    const d = new Date(Date.UTC(year, month, 1));
+    d.setUTCDate(clampDay(d.getUTCFullYear(), d.getUTCMonth(), day));
+    return d;
+  }
+
+  /**
+   * Card statement / due helpers for budgeting around payday vs statement close.
+   * Liability balances are positive = amount owed.
+   */
+  function buildCardSchedule(transactions, accounts, snapshot, asOfDate) {
+    const asOf = asOfDate || todayIso();
+    const cards = (accounts || []).filter(
+      (account) => account.type === "liability" && account.id !== "outside-payments"
+    );
+    return cards.map((account) => {
+      const statementDay = Number(account.statementDay) || 2;
+      const dueDay = Number(account.dueDay) || 27;
+      let lastStatement = dateWithDay(asOf, statementDay, 0);
+      if (lastStatement > parseDate(asOf)) {
+        lastStatement = dateWithDay(asOf, statementDay, -1);
+      }
+      let nextDue = dateWithDay(asOf, dueDay, 0);
+      if (nextDue <= lastStatement) {
+        nextDue = dateWithDay(toDateString(lastStatement), dueDay, 1);
+      }
+      if (nextDue <= parseDate(asOf)) {
+        nextDue = dateWithDay(asOf, dueDay, 1);
+      }
+      const lastStatementIso = toDateString(lastStatement);
+      const nextDueIso = toDateString(nextDue);
+      const cycleSpend = (transactions || [])
+        .filter(
+          (tx) =>
+            tx.account === account.id &&
+            tx.direction === "out" &&
+            tx.date >= lastStatementIso &&
+            tx.date <= asOf
+        )
+        .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+      const rawBalance = Number(snapshot?.balances?.[account.id]);
+      const balance = Number.isFinite(rawBalance) ? Math.abs(rawBalance) : 0;
+      const daysToDue = daysBetween(asOf, nextDueIso);
+      const payday = snapshot?.safeToSpend?.nextPayday || null;
+      let payTiming = "set statement/due days";
+      if (payday) {
+        if (payday <= nextDueIso) {
+          payTiming = `Pay from paycheck on ${payday} (before due ${nextDueIso})`;
+        } else {
+          payTiming = `Due ${nextDueIso} is before next payday ${payday} — use liquid cash`;
+        }
+      } else {
+        payTiming = `Due in ${daysToDue}d (${nextDueIso})`;
+      }
+      return {
+        accountId: account.id,
+        label: account.label || account.id,
+        balance: roundMoney(balance),
+        reportedAt: account.reportedAt || null,
+        statementDay,
+        dueDay,
+        lastStatement: lastStatementIso,
+        nextDue: nextDueIso,
+        daysToDue,
+        cycleSpend: roundMoney(cycleSpend),
+        paySuggestion: roundMoney(balance),
+        payTiming,
+        source: account.reportedBalance != null ? "live" : "ledger"
+      };
+    });
   }
 
   return {
     DEFAULT_CONFIG,
     SAMPLE_FIXTURE,
+    ENGINE_VERSION,
     computeSnapshot,
     detectRecurring,
     detectRecurringStreams,
+    detectIncomeStreams,
+    buildCardSchedule,
     payPeriodBounds,
     weekBounds,
     accountActivityDelta,
@@ -2179,6 +3876,7 @@
     isCashLikeHolding,
     normalizeHoldings,
     splitBalanceByHoldings,
+    normalizeIncomeOverrides,
     todayIso
   };
 });
@@ -2407,6 +4105,10 @@
       settings: {
         asOfDate: todayIso(),
         weeklySavingsTarget: 300,
+        checkingReserve: 1000,
+        incomeStreamOverrides: {},
+        budgetEnvelopes: {},
+        declinedEnvelopeCategories: [],
         monthlyIncome: 5200,
         weeklyIncome: 1200,
         openingBalances: {
@@ -2420,6 +4122,12 @@
           savings: "cash",
           vanguard: "investment",
           "outside-payments": "external"
+        },
+        accountLabels: {
+          checking: "Checking",
+          savings: "Savings",
+          vanguard: "Vanguard",
+          "outside-payments": "Outside payments"
         }
       },
       bills: DEFAULT_BILLS.map((b) => ({ ...b })),
@@ -2486,7 +4194,10 @@
     if (!root.MoneyRules || !root.MoneyModel) {
       throw shelfError("NOT_READY", "Money engine has not loaded");
     }
-    const snapshot = root.MoneyModel.computeSnapshot(liveTransactions(), state.settings);
+    const snapshot = root.MoneyModel.computeSnapshot(liveTransactions(), {
+      ...state.settings,
+      accounts: state.accounts || []
+    });
     return {
       kind: "snapshot",
       netWorth: snapshot.netWorth,
@@ -2500,23 +4211,37 @@
       expensesThisMonth: snapshot.expensesThisMonth,
       spendingMonth: snapshot.spendingMonth,
       spendingByCategory: snapshot.spendingByCategory,
+      categoryDiagnostics: snapshot.categoryDiagnostics,
       recurring: snapshot.recurring,
       balances: snapshot.balances,
       safeToSpend: {
         period: snapshot.safeToSpend.period,
         periodSource: snapshot.safeToSpend.periodSource,
+        fundingMode: snapshot.safeToSpend.fundingMode,
         nextPayday: snapshot.safeToSpend.nextPayday,
         horizonDays: snapshot.safeToSpend.horizonDays,
-        amount: snapshot.safeToSpend.remaining,
+        allocationWeeks: snapshot.safeToSpend.allocationWeeks,
+        horizonSource: snapshot.safeToSpend.horizonSource,
+        amount: snapshot.safeToSpend.amount,
         income: snapshot.safeToSpend.income,
         weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+        incomeReceived: snapshot.safeToSpend.incomeReceived,
+        incomeExpected: snapshot.safeToSpend.incomeExpected,
         committed: snapshot.safeToSpend.committed,
         commitments: snapshot.safeToSpend.commitments,
+        dueThisWeek: snapshot.safeToSpend.dueThisWeek || [],
         savingsTarget: snapshot.safeToSpend.savingsTarget,
+        savingsNeeded: snapshot.safeToSpend.savingsNeeded,
+        savingsAlready: snapshot.safeToSpend.savingsAlready,
+        savingsRemaining: snapshot.safeToSpend.savingsRemaining,
         spent: snapshot.safeToSpend.spent,
-        remaining: snapshot.safeToSpend.remaining
+        remaining: snapshot.safeToSpend.remaining,
+        cashBackedRemaining: snapshot.safeToSpend.cashBackedRemaining,
+        breakdown: snapshot.safeToSpend.breakdown || null,
+        incomeOutlook: snapshot.safeToSpend.incomeOutlook || [],
+        assumptions: snapshot.safeToSpend.assumptions || []
       },
-      flags: []
+      flags: snapshot.flags || []
     };
   }
 
@@ -2577,11 +4302,45 @@
       kind: "digest",
       v: 1,
       generatedAt: new Date().toISOString(),
+      date: asOf,
       asOfDate: asOf,
-      today,
-      watching: state.watching || [],
-      reading: state.reading || [],
-      junk: state.junk || []
+      glance: {
+        clearDay: today.length === 0,
+        heavyDay: false,
+        anchor:
+          today.length === 0
+            ? "You're clear today — nothing mandatory on the board."
+            : `${today.length} item${today.length === 1 ? "" : "s"} on the board.`,
+        examHorizon: [],
+        today: today
+          .filter((row) => row.kind === "bill" || row.dueAt)
+          .slice(0, 8)
+          .map((row) => ({
+            id: row.id,
+            time: null,
+            title: row.title || row.name,
+            kind: row.kind === "bill" ? "deadline" : "personal",
+            protected: true,
+            leadDays: null
+          })),
+        backlog: {
+          open: today.filter((r) => r.kind === "task" || r.kind === "bill").length,
+          overdue: today.filter((r) => r.overdue).length
+        },
+        studyNext: null,
+        junk: { count: (state.junk || []).length, targetRef: null },
+        reading: (state.reading || []).map((r) => ({ id: r.id, title: r.title }))
+      },
+      detail: {
+        today,
+        watching: state.watching || [],
+        backlog: today.filter((r) => r.kind === "task" || r.kind === "bill"),
+        reading: state.reading || [],
+        junk: state.junk || [],
+        examHorizon: [],
+        topics: [],
+        needsALook: { conflicts: [], confirmDates: [], coverageGaps: [] }
+      }
     };
   }
 
@@ -2592,7 +4351,23 @@
       return;
     }
     if (item.type === "action.settings.update" && item.data) {
-      Object.assign(state.settings, item.data);
+      const data = { ...item.data };
+      if (data.incomeStreamOverrides) {
+        const prev = state.settings.incomeStreamOverrides || {};
+        const merged = { ...prev };
+        Object.entries(data.incomeStreamOverrides).forEach(([key, value]) => {
+          const normalizedKey = String(key || "").trim().toLowerCase();
+          if (!normalizedKey) return;
+          if (value == null || value === "" || value.status === "clear") {
+            delete merged[normalizedKey];
+            return;
+          }
+          const status = typeof value === "string" ? value : value.status;
+          if (status) merged[normalizedKey] = { status: String(status) };
+        });
+        data.incomeStreamOverrides = merged;
+      }
+      Object.assign(state.settings, data);
       return;
     }
     if (item.type === "action.bills.upsert" && item.data) {
@@ -2642,7 +4417,7 @@
       item.data?.targetRef?.itemId
     ) {
       const id = item.data.targetRef.itemId;
-      const fromToday = (buildDigest().today || []).find((row) => row.id === id);
+      const fromToday = (buildDigest().detail?.today || []).find((row) => row.id === id);
       if (fromToday && fromToday.kind === "event") {
         state.watching = state.watching.filter((w) => w.id !== id);
         state.watching.push({
@@ -2668,7 +4443,12 @@
             settings: {
               monthlyIncome: state.settings.monthlyIncome,
               weeklyIncome: state.settings.weeklyIncome,
-              weeklySavingsTarget: state.settings.weeklySavingsTarget
+              weeklySavingsTarget: state.settings.weeklySavingsTarget,
+              checkingReserve: state.settings.checkingReserve,
+              incomeStreamOverrides: state.settings.incomeStreamOverrides || {},
+              budgetEnvelopes: state.settings.budgetEnvelopes || {},
+              declinedEnvelopeCategories:
+                state.settings.declinedEnvelopeCategories || []
             },
             accounts: state.accounts
           });
@@ -2967,7 +4747,7 @@
 
     function installOfflineEngines() {
       if (window.__lifeOfflineEngines) return;
-      ["src-rules", "src-model", "src-bills", "src-mock"].forEach((id) => {
+      ["src-rules", "src-budget", "src-model", "src-bills", "src-mock"].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         const code = el.textContent || "";

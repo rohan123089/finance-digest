@@ -185,11 +185,67 @@ async function propose(db) {
   };
 }
 
+/**
+ * AI fallback for messy syllabus prose. Always low-confidence / confirm-me only.
+ * Never writes confirmed assessment dates onto the glance horizon.
+ */
+function proposeSyllabusStructure(db, text, options = {}) {
+  const syllabus = require("../engine/syllabus.js");
+  const parsed = syllabus.fromAiExtraction(
+    {
+      course: options.course || null,
+      assessments: options.assessments || [],
+      topics: options.topics || []
+    },
+    {
+      courseId: options.courseId,
+      courseName: options.courseName,
+      term: options.term
+    }
+  );
+  // If raw text provided without structured assessments, leave confirm queue empty
+  // unless caller supplied structured guesses (LOCAL heuristics can pass them).
+  if (text && (!options.assessments || !options.assessments.length)) {
+    // Deterministic parse first; AI path only marks leftovers as confirm-me.
+    const det = syllabus.parseSyllabusText(text, {
+      courseId: options.courseId,
+      courseName: options.courseName,
+      term: options.term,
+      asOfDate: options.asOfDate,
+      source: "ai"
+    });
+    det.assessments.forEach((a) => {
+      a.confidence = "low";
+      a.confirmed = false;
+      a.source = "ai";
+    });
+    det.confirmDates = det.assessments.map((a) => ({
+      assessmentId: a.id,
+      proposedDate: a.date,
+      source: "ai",
+      title: a.title
+    }));
+    const applied = dbApi.applySyllabusParse(db, det, {
+      sourceKind: "email",
+      id: `syllabus:ai:${Date.now()}`,
+      contentHash: `ai-${Date.now()}`
+    });
+    return { mode: "LOCAL", confirmOnly: true, ...applied, confirmDates: det.confirmDates };
+  }
+  const applied = dbApi.applySyllabusParse(db, parsed, {
+    sourceKind: "email",
+    id: `syllabus:ai:${Date.now()}`,
+    contentHash: `ai-${Date.now()}`
+  });
+  return { mode: "LOCAL", confirmOnly: true, ...applied, confirmDates: parsed.confirmDates };
+}
+
 module.exports = {
   MODES,
   getAiMode,
   setAiMode,
   propose,
+  proposeSyllabusStructure,
   localHeuristics,
   snapshotForAi,
   assertSafeForAi

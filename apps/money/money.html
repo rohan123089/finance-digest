@@ -67,6 +67,13 @@
     }
     .safe-value.negative { color: var(--danger); }
     .safe-detail { color: var(--muted); margin-top: 8px; }
+    .spend-pause td {
+      padding: 9px 12px;
+      color: var(--text);
+      background: rgba(94, 224, 160, .08);
+      white-space: normal;
+    }
+    .spend-pause button { margin-left: 8px; }
     .config {
       display: grid;
       grid-template-columns: repeat(2, minmax(120px, 1fr));
@@ -148,6 +155,63 @@
     td select { padding: 4px 6px; }
     select:disabled { color: #60707e; opacity: .72; }
     .merchant { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    .month-windows { display: grid; gap: 8px; padding: 10px 12px 14px; }
+    .month-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #101820;
+      overflow: hidden;
+    }
+    .month-card.open { border-color: #3a5168; }
+    .month-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(0, 1fr)) auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      padding: 10px 12px;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+    }
+    .month-summary:hover { background: #151f2a; }
+    .month-summary .label { font-weight: 700; }
+    .month-summary .tally { font-variant-numeric: tabular-nums; font-size: 12px; }
+    .month-summary .tally small { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+    .month-summary .chev { color: var(--muted); font-size: 12px; }
+    .month-body { display: none; border-top: 1px solid var(--line); }
+    .month-card.open .month-body { display: block; }
+    .month-card.open .chev { transform: rotate(90deg); }
+    .recurring-tag {
+      display: inline-block;
+      margin-left: 6px;
+      border: 1px solid #3a5168;
+      border-radius: 999px;
+      color: var(--blue);
+      font-size: 9px;
+      padding: 1px 6px;
+      text-transform: uppercase;
+    }
+    .learn-toast {
+      margin: 0 12px 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(91, 155, 213, .12);
+      color: var(--blue);
+      font-size: 12px;
+    }
+    .promo-btn {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #18212c;
+      color: var(--text);
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
     .badge {
       display: inline-block;
       border: 1px solid var(--line);
@@ -207,7 +271,7 @@
     <header>
       <section class="hero">
         <div>
-          <div class="eyebrow" id="safe-eyebrow">Safe to spend until payday</div>
+          <div class="eyebrow" id="safe-eyebrow">Safe to spend this week</div>
           <div class="safe-value" id="safe-value">$0</div>
           <div class="safe-detail" id="safe-detail"></div>
         </div>
@@ -223,57 +287,111 @@
           <input id="weekly-savings" type="number" min="0" step="10" value="300">
         </label>
         <label>
+          <span>Checking reserve</span>
+          <input id="checking-reserve" type="number" min="0" step="50" value="1000">
+        </label>
+        <label>
           <span>Horizon</span>
-          <input id="horizon-note" value="Paycheck → next paycheck" disabled>
+          <input id="horizon-note" value="This calendar week" disabled>
         </label>
         <label>
           <span>Edits</span>
-          <input id="edit-note" value="In memory until Shelf persists" disabled>
+          <input id="edit-note" value="Saved to hub on each change" disabled>
         </label>
       </section>
     </header>
 
+    <section class="panel" style="margin-bottom:12px" aria-label="Weekly category diagnostics">
+      <div class="panel-heading">
+        <h2>Top categories · this week</h2>
+        <strong id="category-period"></strong>
+      </div>
+      <div class="list" id="top-categories"></div>
+      <details style="border-top:1px solid var(--line);padding:10px 12px">
+        <summary style="cursor:pointer;color:var(--muted)">Problem-category envelopes (optional)</summary>
+        <div class="list" id="envelope-suggestions" style="padding-left:0;padding-right:0"></div>
+        <div class="footnote" style="padding-left:0;padding-right:0">
+          Suggested from your existing tags. Set only the categories you want; no full budget grid.
+        </div>
+      </details>
+    </section>
+
     <section class="metrics" aria-label="Money snapshot">
       <div class="metric"><div class="eyebrow">Net worth</div><strong id="net-worth"></strong></div>
-      <div class="metric"><div class="eyebrow">Liquid</div><strong id="liquid"></strong></div>
-      <div class="metric"><div class="eyebrow">Invested</div><strong id="invested"></strong></div>
+      <div class="metric"><div class="eyebrow">Cash &amp; MM</div><strong id="liquid"></strong></div>
+      <div class="metric"><div class="eyebrow">Securities</div><strong id="invested"></strong></div>
       <div class="metric"><div class="eyebrow">Savings rate</div><strong id="savings-rate"></strong></div>
       <div class="metric"><div class="eyebrow">Runway</div><strong id="runway"></strong></div>
       <div class="metric external"><div class="eyebrow">Owed · reimbursements</div><strong id="owed"></strong></div>
     </section>
 
+    <section class="metrics" aria-label="Credit cards" id="card-metrics" style="margin-top:-4px">
+      <div class="metric external"><div class="eyebrow">Amex owed</div><strong id="card-amex">—</strong></div>
+      <div class="metric external"><div class="eyebrow">Discover owed</div><strong id="card-discover">—</strong></div>
+      <div class="metric"><div class="eyebrow">Card spend · 90d</div><strong id="card-spend-90">—</strong></div>
+      <div class="metric"><div class="eyebrow">Cards categorized</div><strong id="card-cat-rate">—</strong></div>
+      <div class="metric"><div class="eyebrow">Needs review</div><strong id="card-review">—</strong></div>
+      <div class="metric"><div class="eyebrow">Rewards</div><strong id="card-rewards-miss">—</strong></div>
+    </section>
+
+    <section class="panel" id="card-budget-panel" style="margin-bottom:12px" aria-label="Card pay plan">
+      <div class="panel-heading">
+        <h2>Card pay plan</h2>
+        <strong id="card-budget-total">—</strong>
+      </div>
+      <div class="list" id="card-schedule"></div>
+      <div class="footnote" style="padding:10px 12px 12px;color:var(--muted)">
+        Cards close on different days than payday. Set statement / due days below;
+        pay suggestions line up with your next paycheck when it falls before the due date.
+        Live SimpleFIN balances override messy ledger math (UWCU payments + card charges).
+      </div>
+    </section>
+
     <section class="workspace">
       <section class="panel">
         <div class="panel-heading">
-          <h2>Transaction review</h2>
+          <h2>Monthly review</h2>
           <span class="review-count" id="review-count"></span>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Merchant</th>
-                <th>Account</th>
-                <th>Amount</th>
-                <th>Direction</th>
-                <th>Category</th>
-                <th>Transfer to</th>
-              </tr>
-            </thead>
-            <tbody id="transactions"></tbody>
-          </table>
-        </div>
+        <div id="learn-toast" class="learn-toast" hidden></div>
+        <div class="month-windows" id="month-windows"></div>
         <div class="footnote">
-          HTML talks only to <code>window.Shelf</code>. The hub owns persistence
-          and snapshot math; file mode uses the local mock.
+          Click a month for that month’s income, charges, and transfers.
+          Category edits teach the hub — similar merchants update automatically.
         </div>
       </section>
 
       <aside class="side">
         <section class="panel">
-          <div class="panel-heading"><h2>Spending this month</h2><strong id="expense-total"></strong></div>
+          <div class="panel-heading">
+            <h2>Spending by category</h2>
+            <strong id="expense-total"></strong>
+          </div>
+          <div style="display:flex;gap:8px;padding:8px 12px 0;align-items:center">
+            <label style="display:flex;gap:6px;align-items:center;color:var(--muted);font-size:11px">
+              <select id="spend-window" style="width:auto;padding:4px 6px">
+                <option value="90">Last 90 days</option>
+                <option value="month">This month</option>
+                <option value="cards">Cards · 90d</option>
+              </select>
+            </label>
+            <button type="button" id="recategorize-btn" style="margin-left:auto;border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:4px 8px;font-size:11px;cursor:pointer">Re-run categories</button>
+          </div>
           <div class="list" id="categories"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Expected money</h2><strong id="income-outlook-total"></strong></div>
+          <div class="list" id="income-outlook"></div>
+          <div class="footnote">
+            Safe-to-spend uses checking cash already on hand. Confirm active income so the app knows when cash refills; ignore stale jobs. Expected money does not increase the weekly number until it posts.
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><h2>Known outflows</h2><strong id="outflows-total"></strong></div>
+          <div class="list" id="known-outflows"></div>
+          <div class="footnote">
+            Only unpaid bills/cards the hub can see through the next confirmed payday (or 4 weeks). Missing bills are not assumed.
+          </div>
         </section>
         <section class="panel">
           <div class="panel-heading"><h2>Detected recurring</h2><strong id="recurring-total"></strong></div>
@@ -306,13 +424,19 @@
             <button type="button" id="rewards-optimize" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Optimize</button>
             <button type="button" id="rewards-refresh" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Refresh from web</button>
             <button type="button" id="rewards-add-offer" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add offer</button>
-            <div class="eyebrow">Rates treated as cash-equivalent. Edit Amex seed rules to match your card. Advisory only.</div>
+            <div class="eyebrow">Offline rules label Amex/Discover spend; Optimize compares earn rates. Advisory only.</div>
           </div>
         </section>
         <section class="panel">
           <div class="panel-heading"><h2>Account balances</h2></div>
+          <div id="balance-warnings" class="footnote" style="padding:8px 12px;color:var(--warn)" hidden></div>
           <div class="list" id="accounts"></div>
           <div class="account-actions" style="display:grid;gap:8px;padding:12px 14px 14px;border-top:1px solid var(--line)">
+            <div class="eyebrow">Live balance from uploads (optional override)</div>
+            <select id="balance-account" aria-label="Account for balance"></select>
+            <input id="balance-value" type="number" step="0.01" placeholder="Only if a statement has no Balance column" style="border:1px solid var(--line);border-radius:8px;background:#0f1620;color:var(--text);padding:8px 10px">
+            <button type="button" id="balance-save" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Save override</button>
+            <div class="eyebrow">UWCU CSV/PDF imports set checking/savings from the file’s Balance column automatically. Vanguard/Amex use SimpleFIN. Manual override is only a backup.</div>
             <div class="eyebrow">Manage</div>
             <button type="button" id="add-account" style="border:1px solid var(--line);border-radius:8px;background:#18212c;color:var(--text);padding:8px 10px;cursor:pointer">Add account</button>
             <label style="display:grid;gap:4px">
@@ -326,6 +450,8 @@
             <a id="setup-link" href="/apps/hub/setup.html" style="color:var(--accent);font-size:12px">Hub setup →</a>
             <a id="simplefin-link" href="/apps/hub/simplefin.html" style="color:var(--muted);font-size:12px">SimpleFIN →</a>
             <a id="gmail-link" href="/apps/hub/gmail.html" style="color:var(--accent);font-size:12px;margin-left:10px">Connect Gmail →</a>
+            <a href="/apps/digest/digest.html" style="color:var(--accent);font-size:12px;margin-left:10px">Full Digest →</a>
+            <a href="/apps/app.html" style="color:var(--muted);font-size:12px;margin-left:10px">Phone app →</a>
           </div>
         </section>
       </aside>
@@ -337,14 +463,17 @@
   <script src="../shelf/hub-shelf.js"></script>
   <script src="../shelf/mock-shelf.js"></script>
   <script src="../../engine/rules.js"></script>
+  <script src="../../engine/budget.js"></script>
   <script src="../../engine/model.js"></script>
   <script>
     "use strict";
 
     const CATEGORIES = [
-      "income", "groceries", "dining", "housing", "transportation", "utilities",
-      "subscriptions", "health", "shopping", "entertainment", "uncategorized"
+      "income", "groceries", "dining", "housing", "transportation", "travel",
+      "utilities", "subscriptions", "health", "shopping", "entertainment",
+      "fees", "uncategorized"
     ];
+    const CARD_ACCOUNTS = new Set(["amex", "discover"]);
 
     const state = {
       transactions: [],
@@ -355,7 +484,11 @@
       bills: [],
       billsUpcoming: [],
       rewards: null,
-      importBatches: []
+      importBatches: [],
+      openMonthKey: null,
+      lastLearnMessage: "",
+      budgetEnvelopes: {},
+      declinedEnvelopeCategories: []
     };
 
     const currency = new Intl.NumberFormat("en-US", {
@@ -370,7 +503,9 @@
     });
 
     const weeklySavingsInput = document.querySelector("#weekly-savings");
+    const checkingReserveInput = document.querySelector("#checking-reserve");
     const horizonNote = document.querySelector("#horizon-note");
+    const incomeStreamOverrides = {};
 
     function option(value, label, selected) {
       return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
@@ -385,7 +520,11 @@
     function settings() {
       return {
         asOfDate: state.asOfDate,
-        weeklySavingsTarget: Number(weeklySavingsInput.value) || 0
+        weeklySavingsTarget: Number(weeklySavingsInput.value) || 0,
+        checkingReserve: Number(checkingReserveInput?.value) || 0,
+        incomeStreamOverrides: { ...incomeStreamOverrides },
+        budgetEnvelopes: { ...state.budgetEnvelopes },
+        declinedEnvelopeCategories: [...state.declinedEnvelopeCategories]
       };
     }
 
@@ -396,110 +535,562 @@
         (tx.direction !== "transfer" && !tx.category);
     }
 
+    function monthLabel(key) {
+      const [y, m] = String(key || "").split("-");
+      const date = new Date(Date.UTC(Number(y), Number(m) - 1, 1));
+      return date.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+    }
+
+    function hubMonths() {
+      const fromSnap = state.snapshot?.months;
+      if (Array.isArray(fromSnap) && fromSnap.length) return fromSnap;
+      // Fallback if hub snapshot not yet enriched (mock / old hub).
+      const map = new Map();
+      state.transactions.forEach((tx) => {
+        if (!tx?.date || tx.duplicateOf) return;
+        const key = tx.date.slice(0, 7);
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            income: 0,
+            expenses: 0,
+            transfers: 0,
+            needsReviewCount: 0,
+            transactionIds: []
+          });
+        }
+        const row = map.get(key);
+        row.transactionIds.push(tx.id);
+        if (tx.needsReview) row.needsReviewCount += 1;
+        if (tx.direction === "in") row.income += tx.amount;
+        else if (tx.direction === "out") row.expenses += tx.amount;
+        else if (tx.direction === "transfer") row.transfers += tx.amount;
+      });
+      return [...map.values()]
+        .map((row) => ({
+          ...row,
+          net: row.income - row.expenses,
+          count: row.transactionIds.length
+        }))
+        .sort((a, b) => b.key.localeCompare(a.key));
+    }
+
+    function renderTxRow(tx) {
+      const mark = state.snapshot?.recurringMarks?.[tx.id];
+      const directionOptions = [
+        option("", "Review…", tx.direction),
+        option("in", "Income", tx.direction),
+        option("out", "Expense", tx.direction),
+        option("transfer", "Transfer", tx.direction)
+      ].join("");
+      const categoryOptions = [
+        option("", "—", tx.category),
+        ...CATEGORIES.map((category) => option(category, category, tx.category))
+      ].join("");
+      const targetOptions = [
+        option("", "Choose…", tx.transferAccount),
+        ...Object.keys(state.accountLabels)
+          .filter((account) => account !== tx.account)
+          .map((account) => option(account, state.accountLabels[account], tx.transferAccount))
+      ].join("");
+      const recur =
+        mark
+          ? `<span class="recurring-tag" title="${escapeHtml(mark.cadenceLabel)}">${escapeHtml(mark.cadenceLabel || "recurring")}</span>`
+          : "";
+      return `
+        <tr data-id="${escapeHtml(tx.id)}" class="${tx.needsReview ? "needs-review" : ""}">
+          <td>${escapeHtml(tx.date.slice(5))}</td>
+          <td class="merchant" title="${escapeHtml(tx.merchant)}">${escapeHtml(tx.merchant)}${recur}</td>
+          <td><span class="badge">${escapeHtml(state.accountLabels[tx.account] || tx.account)}</span></td>
+          <td class="amount">${preciseCurrency.format(tx.amount)}</td>
+          <td><select class="direction" aria-label="Direction for ${escapeHtml(tx.merchant)}">${directionOptions}</select></td>
+          <td><select class="category" ${tx.direction === "transfer" || !tx.direction ? "disabled" : ""} aria-label="Category for ${escapeHtml(tx.merchant)}">${categoryOptions}</select></td>
+          <td><select class="target" ${tx.direction === "transfer" ? "" : "disabled"} aria-label="Transfer destination for ${escapeHtml(tx.merchant)}">${targetOptions}</select></td>
+        </tr>`;
+    }
+
     function renderTable() {
-      const rows = [...state.transactions].sort((a, b) => b.date.localeCompare(a.date));
-      document.querySelector("#transactions").innerHTML = rows.map((tx) => {
-        const directionOptions = [
-          option("", "Review…", tx.direction),
-          option("in", "Income", tx.direction),
-          option("out", "Expense", tx.direction),
-          option("transfer", "Transfer", tx.direction)
-        ].join("");
-        const categoryOptions = [
-          option("", "—", tx.category),
-          ...CATEGORIES.map((category) => option(category, category, tx.category))
-        ].join("");
-        const targetOptions = [
-          option("", "Choose…", tx.transferAccount),
-          ...Object.keys(state.accountLabels)
-            .filter((account) => account !== tx.account)
-            .map((account) => option(account, state.accountLabels[account], tx.transferAccount))
-        ].join("");
-        return `
-          <tr data-id="${escapeHtml(tx.id)}" class="${tx.needsReview ? "needs-review" : ""}">
-            <td>${escapeHtml(tx.date.slice(5))}</td>
-            <td class="merchant" title="${escapeHtml(tx.merchant)}">${escapeHtml(tx.merchant)}</td>
-            <td><span class="badge">${escapeHtml(state.accountLabels[tx.account] || tx.account)}</span></td>
-            <td class="amount">${preciseCurrency.format(tx.amount)}</td>
-            <td><select class="direction" aria-label="Direction for ${escapeHtml(tx.merchant)}">${directionOptions}</select></td>
-            <td><select class="category" ${tx.direction === "transfer" || !tx.direction ? "disabled" : ""} aria-label="Category for ${escapeHtml(tx.merchant)}">${categoryOptions}</select></td>
-            <td><select class="target" ${tx.direction === "transfer" ? "" : "disabled"} aria-label="Transfer destination for ${escapeHtml(tx.merchant)}">${targetOptions}</select></td>
-          </tr>`;
-      }).join("");
+      const months = hubMonths();
+      const toast = document.querySelector("#learn-toast");
+      if (toast) {
+        if (state.lastLearnMessage) {
+          toast.hidden = false;
+          toast.textContent = state.lastLearnMessage;
+        } else {
+          toast.hidden = true;
+        }
+      }
+      if (!months.length) {
+        document.querySelector("#month-windows").innerHTML =
+          `<div class="empty">No transactions yet</div>`;
+        return;
+      }
+      if (
+        state.openMonthKey &&
+        !months.some((m) => m.key === state.openMonthKey)
+      ) {
+        state.openMonthKey = months[0].key;
+      }
+      const byId = new Map(state.transactions.map((tx) => [tx.id, tx]));
+      document.querySelector("#month-windows").innerHTML = months
+        .map((month) => {
+          const open = state.openMonthKey === month.key;
+          const txs = (month.transactionIds || [])
+            .map((id) => byId.get(id))
+            .filter(Boolean)
+            .sort((a, b) => {
+              if (a.needsReview !== b.needsReview) return a.needsReview ? -1 : 1;
+              return b.date.localeCompare(a.date);
+            });
+          const body = open
+            ? `<div class="month-body table-wrap" style="max-height:420px;min-height:0">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th><th>Merchant</th><th>Account</th><th>Amount</th>
+                      <th>Direction</th><th>Category</th><th>Transfer to</th>
+                    </tr>
+                  </thead>
+                  <tbody>${txs.map(renderTxRow).join("") || `<tr><td colspan="7" class="empty">No rows</td></tr>`}</tbody>
+                </table>
+              </div>`
+            : "";
+          const review =
+            month.needsReviewCount > 0
+              ? ` · ${month.needsReviewCount} review`
+              : "";
+          return `
+            <div class="month-card ${open ? "open" : ""}" data-month="${escapeHtml(month.key)}">
+              <button type="button" class="month-summary" data-month="${escapeHtml(month.key)}" aria-expanded="${open}">
+                <span class="label">${escapeHtml(monthLabel(month.key))}<small style="display:block;color:var(--muted);font-weight:500">${month.count || txs.length} txs${review}</small></span>
+                <span class="tally"><small>Income</small>${currency.format(month.income || 0)}</span>
+                <span class="tally"><small>Expenses</small>${currency.format(month.expenses || 0)}</span>
+                <span class="tally"><small>Net</small>${currency.format(month.net != null ? month.net : (month.income || 0) - (month.expenses || 0))}</span>
+                <span class="chev">›</span>
+              </button>
+              ${body}
+            </div>`;
+        })
+        .join("");
     }
 
     function renderList(selector, rows, emptyText) {
-      document.querySelector(selector).innerHTML = rows.length
+      const el = document.querySelector(selector);
+      if (!el) return;
+      el.innerHTML = rows.length
         ? rows.join("")
         : `<div class="empty">${emptyText}</div>`;
+    }
+
+    function daysAgoIso(days, asOf) {
+      const base = asOf ? new Date(`${asOf}T12:00:00Z`) : new Date();
+      base.setUTCDate(base.getUTCDate() - days);
+      return base.toISOString().slice(0, 10);
+    }
+
+    function spendingBreakdown(mode) {
+      const asOf = state.asOfDate || state.snapshot?.asOfDate;
+      const monthKey = (asOf || "").slice(0, 7);
+      const since90 = daysAgoIso(90, asOf);
+      const map = {};
+      let total = 0;
+      for (const tx of state.transactions) {
+        if (tx.direction !== "out" || !Number.isFinite(tx.amount)) continue;
+        if (mode === "month") {
+          if ((tx.date || "").slice(0, 7) !== monthKey) continue;
+        } else {
+          if ((tx.date || "") < since90) continue;
+          if (asOf && tx.date > asOf) continue;
+        }
+        if (mode === "cards" && !CARD_ACCOUNTS.has(tx.account)) continue;
+        const category = tx.category || "uncategorized";
+        map[category] = (map[category] || 0) + tx.amount;
+        total += tx.amount;
+      }
+      return { map, total };
+    }
+
+    function cardBalance(accountId) {
+      const schedule = (state.snapshot?.cardSchedule || []).find(
+        (row) => row.accountId === accountId
+      );
+      if (schedule && Number.isFinite(schedule.balance)) return schedule.balance;
+      const raw = Number(state.snapshot?.balances?.[accountId]);
+      return Number.isFinite(raw) ? Math.abs(raw) : 0;
+    }
+
+    function renderCardMetrics() {
+      const amexEl = document.querySelector("#card-amex");
+      const discEl = document.querySelector("#card-discover");
+      if (amexEl) amexEl.textContent = currency.format(cardBalance("amex"));
+      if (discEl) discEl.textContent = currency.format(cardBalance("discover"));
+
+      const asOf = state.asOfDate || state.snapshot?.asOfDate;
+      const since90 = daysAgoIso(90, asOf);
+      let spend = 0;
+      let out = 0;
+      let labeled = 0;
+      let review = 0;
+      for (const tx of state.transactions) {
+        if (!CARD_ACCOUNTS.has(tx.account)) continue;
+        if (tx.needsReview) review += 1;
+        if (tx.direction !== "out") continue;
+        if ((tx.date || "") < since90) continue;
+        if (asOf && tx.date > asOf) continue;
+        spend += tx.amount || 0;
+        out += 1;
+        if (tx.category && tx.category !== "uncategorized") labeled += 1;
+      }
+      const spendEl = document.querySelector("#card-spend-90");
+      const rateEl = document.querySelector("#card-cat-rate");
+      const reviewEl = document.querySelector("#card-review");
+      const missEl = document.querySelector("#card-rewards-miss");
+      if (spendEl) spendEl.textContent = currency.format(spend);
+      if (rateEl) rateEl.textContent = out ? `${Math.round((labeled / out) * 100)}%` : "—";
+      if (reviewEl) reviewEl.textContent = String(review);
+      if (missEl) {
+        const missed = state.rewards?.totals?.missedUsd;
+        missEl.textContent = missed != null ? `~$${Number(missed).toFixed(0)}` : "—";
+      }
+    }
+
+    function renderCardSchedule() {
+      const rows = state.snapshot?.cardSchedule || [];
+      const totalEl = document.querySelector("#card-budget-total");
+      const owed = rows.reduce((sum, row) => sum + (Number(row.balance) || 0), 0);
+      if (totalEl) totalEl.textContent = owed ? `${currency.format(owed)} owed` : "Paid up";
+      renderList(
+        "#card-schedule",
+        rows.map((row) => {
+          const source =
+            row.source === "live"
+              ? "live balance"
+              : "ledger (sync SimpleFIN for live)";
+          return `
+          <div class="list-row" style="align-items:start;gap:12px">
+            <span style="flex:1;min-width:0">
+              <strong>${escapeHtml(row.label)}</strong>
+              <br><small style="color:var(--muted)">
+                Statement day ${row.statementDay} · due day ${row.dueDay}
+                · cycle spend ${currency.format(row.cycleSpend || 0)}
+                · ${escapeHtml(source)}
+              </small>
+              <br><small style="color:var(--accent)">${escapeHtml(row.payTiming || "")}</small>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+                <label style="display:grid;gap:2px;font-size:11px;color:var(--muted)">
+                  Statement day
+                  <input type="number" min="1" max="31" class="card-statement-day"
+                    data-account="${escapeHtml(row.accountId)}"
+                    value="${Number(row.statementDay) || 1}"
+                    style="width:72px;border:1px solid var(--line);border-radius:6px;background:#0f1620;color:var(--text);padding:4px 6px">
+                </label>
+                <label style="display:grid;gap:2px;font-size:11px;color:var(--muted)">
+                  Due day
+                  <input type="number" min="1" max="31" class="card-due-day"
+                    data-account="${escapeHtml(row.accountId)}"
+                    value="${Number(row.dueDay) || 1}"
+                    style="width:72px;border:1px solid var(--line);border-radius:6px;background:#0f1620;color:var(--text);padding:4px 6px">
+                </label>
+                <button type="button" class="card-schedule-save" data-account="${escapeHtml(row.accountId)}"
+                  style="align-self:end;border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:4px 8px;font-size:11px;cursor:pointer">
+                  Save days
+                </button>
+              </div>
+            </span>
+            <strong style="white-space:nowrap">${currency.format(row.balance || 0)}</strong>
+          </div>`;
+        }),
+        "No credit cards yet"
+      );
+    }
+
+    function renderCategoryPanel() {
+      const mode = document.querySelector("#spend-window")?.value || "90";
+      const { map, total } = spendingBreakdown(mode);
+      const categoryEntries = Object.entries(map).sort(
+        (left, right) => right[1] - left[1]
+      );
+      const largest = categoryEntries[0]?.[1] || 1;
+      document.querySelector("#expense-total").textContent = currency.format(total);
+      renderList("#categories", categoryEntries.map(([name, amount]) => `
+        <div class="list-row">
+          <span>${escapeHtml(name)}<span class="bar"><i style="width:${(amount / largest) * 100}%"></i></span></span>
+          <strong>${currency.format(amount)}</strong>
+        </div>`), "No expenses in this window");
+    }
+
+    function renderBudgetDiagnostics() {
+      const diagnostics = state.snapshot?.categoryDiagnostics || {};
+      const rows = diagnostics.categories || [];
+      const period = document.querySelector("#category-period");
+      if (period) period.textContent = diagnostics.period || "";
+      renderList(
+        "#top-categories",
+        rows.map((row) => `
+          <div class="list-row">
+            <span>${escapeHtml(row.category)}
+              <small style="display:block;color:var(--muted)">
+                usual ${preciseCurrency.format(row.rollingAverage || 0)}
+              </small>
+            </span>
+            <strong>${preciseCurrency.format(row.amount || 0)}</strong>
+          </div>`),
+        "No discretionary spending this week"
+      );
+      const accepted = Object.entries(state.budgetEnvelopes || {});
+      const suggestions = (diagnostics.envelopeSuggestions || []).filter(
+        (row) => !state.budgetEnvelopes[row.category]
+      );
+      renderList(
+        "#envelope-suggestions",
+        [
+          ...accepted.map(([category, limit]) => `
+            <div class="list-row">
+              <span>${escapeHtml(category)} <small style="color:var(--accent)">active</small></span>
+              <span><strong>${currency.format(limit)}</strong>
+                <button type="button" class="promo-btn envelope-remove" data-category="${escapeHtml(category)}">Remove</button>
+              </span>
+            </div>`),
+          ...suggestions.map((row) => `
+            <div class="list-row">
+              <span>${escapeHtml(row.category)}
+                <small style="display:block;color:var(--muted)">
+                  ${currency.format(row.currentSpend)} this week · ${currency.format(row.rollingAverage)} usual
+                </small>
+              </span>
+              <span>
+                <button type="button" class="promo-btn envelope-accept" data-category="${escapeHtml(row.category)}" data-limit="${row.suggestedLimit}">Set cap</button>
+                <button type="button" class="promo-btn envelope-decline" data-category="${escapeHtml(row.category)}">No thanks</button>
+              </span>
+            </div>`)
+        ],
+        "No envelope suggestions"
+      );
+    }
+
+    function renderIncomeOutlook(safe) {
+      const list = document.querySelector("#income-outlook");
+      const totalEl = document.querySelector("#income-outlook-total");
+      if (!list) return;
+      const rows = Array.isArray(safe?.incomeOutlook) ? safe.incomeOutlook : [];
+      const activeWeekly = rows
+        .filter((row) => row.active && row.status !== "irregular")
+        .reduce((sum, row) => sum + (Number(row.weeklyShare) || 0), 0);
+      if (totalEl) {
+        totalEl.textContent = activeWeekly
+          ? `${currency.format(activeWeekly)}/wk rhythm`
+          : "No active income";
+      }
+      if (!rows.length) {
+        list.innerHTML = `<div class="empty">No income patterns detected yet</div>`;
+        return;
+      }
+      list.innerHTML = rows
+        .map((row) => {
+          const status = row.status || "observed";
+          const amountLabel = row.cadenceLabel
+            ? `${preciseCurrency.format(row.amount)}/${String(row.cadenceLabel).replace(/ly$/, "")}`
+            : preciseCurrency.format(row.amount);
+          const meta = [
+            status,
+            row.lastDate ? `last ${row.lastDate}` : null,
+            row.nextExpected ? `next ${row.nextExpected}` : null,
+            row.drivesHorizon ? "sets horizon" : null
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          const showConfirm = status !== "confirmed" && status !== "ignored";
+          const showIgnore = status !== "ignored";
+          const showClear = status === "confirmed" || status === "ignored";
+          return `<div class="list-row" style="align-items:flex-start;gap:8px">
+            <span style="min-width:0;flex:1">
+              <strong style="display:block;font-size:13px">${escapeHtml(row.merchant)}</strong>
+              <span style="color:var(--muted);font-size:11px">${escapeHtml(meta)}</span>
+              <span style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+                ${showConfirm ? `<button type="button" class="income-confirm" data-key="${escapeHtml(row.key)}" style="border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:3px 8px;font-size:11px;cursor:pointer">Confirm</button>` : ""}
+                ${showIgnore ? `<button type="button" class="income-ignore" data-key="${escapeHtml(row.key)}" style="border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--text);padding:3px 8px;font-size:11px;cursor:pointer">Ignore</button>` : ""}
+                ${showClear ? `<button type="button" class="income-clear" data-key="${escapeHtml(row.key)}" style="border:1px solid var(--line);border-radius:6px;background:#18212c;color:var(--muted);padding:3px 8px;font-size:11px;cursor:pointer">Clear</button>` : ""}
+              </span>
+            </span>
+            <strong style="white-space:nowrap">${amountLabel}</strong>
+          </div>`;
+        })
+        .join("");
+    }
+
+    function renderKnownOutflows(safe) {
+      const list = document.querySelector("#known-outflows");
+      const totalEl = document.querySelector("#outflows-total");
+      if (!list) return;
+      const rows = Array.isArray(safe?.commitments) ? safe.commitments : [];
+      if (totalEl) {
+        totalEl.textContent = currency.format(safe.committed || 0);
+      }
+      if (!rows.length) {
+        list.innerHTML = `<div class="empty">No unpaid known bills in this cash plan</div>`;
+        return;
+      }
+      list.innerHTML = rows
+        .map(
+          (row) => `<div class="list-row">
+            <span>${escapeHtml(row.title)}
+              <span style="display:block;color:var(--muted);font-size:11px">${escapeHtml(row.source || "")}${row.date ? ` · due ${row.date}` : ""}</span>
+            </span>
+            <strong>${preciseCurrency.format(row.amount || 0)}</strong>
+          </div>`
+        )
+        .join("");
     }
 
     function renderSnapshot() {
       const snapshot = state.snapshot;
       if (!snapshot) return;
-      const safe = snapshot.safeToSpend;
+      const safe = snapshot.safeToSpend || {};
       const safeValue = document.querySelector("#safe-value");
-      safeValue.textContent = currency.format(safe.remaining);
-      safeValue.classList.toggle("negative", safe.remaining < 0);
-      document.querySelector("#safe-eyebrow").textContent = safe.nextPayday
-        ? `Safe to spend until ${safe.nextPayday}`
-        : "Safe to spend this period";
+      if (safeValue) {
+        safeValue.textContent = currency.format(safe.amount ?? safe.breakdown?.safeToSpend ?? 0);
+        safeValue.classList.toggle("negative", (safe.remaining || 0) < 0);
+      }
+      const eyebrow = document.querySelector("#safe-eyebrow");
+      if (eyebrow) {
+        eyebrow.textContent = "Safe to spend this week · after saving";
+      }
       if (horizonNote) {
         horizonNote.value = safe.period
-          ? `${safe.period} · ${safe.horizonDays || "?"}d`
-          : "Paycheck → next paycheck";
+          ? `Week ${safe.period}`
+          : "This calendar week";
       }
-      const incomeLabel = currency.format(safe.income ?? safe.weeklyIncome);
-      document.querySelector("#safe-detail").textContent =
-        `${incomeLabel} in − ` +
-        `${currency.format(safe.committed)} out committed − ` +
-        `${currency.format(safe.savingsTarget)} savings − ` +
-        `${currency.format(safe.spent)} spent`;
-      document.querySelector("#net-worth").textContent = currency.format(snapshot.netWorth);
-      document.querySelector("#liquid").textContent = currency.format(snapshot.liquid);
-      document.querySelector("#invested").textContent = currency.format(snapshot.invested);
-      document.querySelector("#savings-rate").textContent =
-        `${Number(snapshot.savingsRatePct).toFixed(1)}%`;
-      document.querySelector("#runway").textContent = `${snapshot.runwayMonths.toFixed(1)} mo`;
-      document.querySelector("#owed").textContent = currency.format(snapshot.owed || 0);
-      document.querySelector("#owed").closest(".metric")?.classList.toggle(
+      const breakdown = safe.breakdown || {};
+      const detail = document.querySelector("#safe-detail");
+      if (detail) {
+        detail.textContent =
+          `${preciseCurrency.format(safe.remaining || 0)} remaining · ` +
+          `${preciseCurrency.format(breakdown.periodIncome ?? safe.income ?? 0)} income − ` +
+          `${preciseCurrency.format(breakdown.committedBills ?? safe.committed ?? 0)} bills − ` +
+          `${preciseCurrency.format(breakdown.savingsTarget ?? safe.savingsTarget ?? 0)} savings` +
+          (safe.remaining >= 0
+            ? ` · on track to save ${currency.format(safe.savingsTarget || 0)}`
+            : "");
+      }
+      renderIncomeOutlook(safe);
+      renderKnownOutflows(safe);
+      const setText = (sel, text) => {
+        const el = document.querySelector(sel);
+        if (el) el.textContent = text;
+      };
+      setText("#net-worth", currency.format(snapshot.netWorth || 0));
+      setText("#liquid", currency.format(snapshot.liquid || 0));
+      setText("#invested", currency.format(snapshot.invested || 0));
+      const rate =
+        snapshot.savingsRatePct != null
+          ? Number(snapshot.savingsRatePct)
+          : Math.round((Number(snapshot.savingsRate) || 0) * 1000) / 10;
+      setText("#savings-rate", `${(Number.isFinite(rate) ? rate : 0).toFixed(1)}%`);
+      setText(
+        "#runway",
+        `${(Number(snapshot.runwayMonths) || 0).toFixed(1)} mo`
+      );
+      setText("#owed", currency.format(snapshot.owed || 0));
+      document.querySelector("#owed")?.closest(".metric")?.classList.toggle(
         "empty-owed",
         !(snapshot.owed > 0)
       );
-      document.querySelector("#expense-total").textContent = currency.format(
-        snapshot.expensesThisMonth ?? snapshot.expenses
+      setText(
+        "#recurring-total",
+        `${currency.format(snapshot.recurringMonthly || 0)}/mo`
       );
-      document.querySelector("#recurring-total").textContent =
-        `${currency.format(snapshot.recurringMonthly)}/mo`;
 
-      const categoryEntries = Object.entries(snapshot.spendingByCategory)
-        .sort((left, right) => right[1] - left[1]);
-      const largest = categoryEntries[0]?.[1] || 1;
-      renderList("#categories", categoryEntries.map(([name, amount]) => `
-        <div class="list-row">
-          <span>${escapeHtml(name)}<span class="bar"><i style="width:${(amount / largest) * 100}%"></i></span></span>
-          <strong>${currency.format(amount)}</strong>
-        </div>`), "No expenses");
+      try {
+        renderBudgetDiagnostics();
+        renderCategoryPanel();
+        renderCardMetrics();
+        renderCardSchedule();
+      } catch (error) {
+        console.warn("Card/category render failed", error);
+      }
 
-      renderList("#recurring", snapshot.recurring.map((item) => `
-        <div class="list-row">
-          <span>${escapeHtml(item.merchant)} <small>×${item.occurrences}</small></span>
-          <strong>${currency.format(item.amount)}</strong>
-        </div>`), "No monthly patterns yet");
+      renderList("#recurring", [
+        ...(snapshot.billSuggestions || []).map((item) => `
+        <div class="list-row" style="align-items:start">
+          <span>${escapeHtml(item.title || item.merchant)} <small>suggested · ${escapeHtml(item.cadenceLabel || "")} ×${item.occurrences || "?"}</small></span>
+          <span style="display:grid;gap:4px;justify-items:end">
+            <strong>${currency.format(item.amount)}</strong>
+            <button type="button" class="promo-btn bill-promote" data-stream="${escapeHtml(item.streamKey || "")}">Add as bill</button>
+          </span>
+        </div>`),
+        ...(snapshot.recurring || []).map((item) => {
+          const already =
+            (snapshot.billSuggestions || []).some((s) => s.streamKey === item.key);
+          return `
+        <div class="list-row" style="align-items:start">
+          <span>${escapeHtml(item.merchant)} <small>×${item.occurrences}${item.category ? ` · ${escapeHtml(item.category)}` : ""}${item.cadenceLabel ? ` · ${escapeHtml(item.cadenceLabel)}` : ""}</small></span>
+          <span style="display:grid;gap:4px;justify-items:end">
+            <strong>${currency.format(item.amount)}</strong>
+            ${
+              !already && (item.cadenceLabel === "monthly" || item.cadenceLabel === "bimonthly")
+                ? `<button type="button" class="promo-btn bill-promote" data-stream="${escapeHtml(item.key)}">Add as bill</button>`
+                : ""
+            }
+          </span>
+        </div>`;
+        })
+      ], "No monthly patterns yet");
 
       renderBills();
 
-      renderList("#accounts", Object.entries(snapshot.balances).map(([account, balance]) => {
+      const warnings = snapshot.balanceWarnings || [];
+      const warnEl = document.querySelector("#balance-warnings");
+      if (warnEl) {
+        if (warnings.length) {
+          warnEl.hidden = false;
+          warnEl.textContent = warnings
+            .map((w) => `${state.accountLabels[w.accountId] || w.accountId}: ${w.message}`)
+            .join(" · ");
+        } else {
+          warnEl.hidden = true;
+          warnEl.textContent = "";
+        }
+      }
+
+      renderList("#accounts", Object.entries(snapshot.balances || {}).map(([account, balance]) => {
         const breakdown = snapshot.holdingBreakdown?.[account];
+        const source = snapshot.balanceSources?.[account] || "ledger";
         const detail = breakdown
-          ? `<br><small style="color:var(--muted)">${currency.format(breakdown.invested)} invested · ${currency.format(breakdown.cash)} cash/MM</small>`
+          ? `<br><small style="color:var(--muted)">${currency.format(breakdown.invested)} securities · ${currency.format(breakdown.cash)} cash/MM</small>`
           : "";
+        const isCard = CARD_ACCOUNTS.has(account);
+        const shown = isCard ? cardBalance(account) : balance;
+        const suffix = isCard ? " owed" : "";
+        const srcLabel =
+          source === "live"
+            ? "live"
+            : isCard
+              ? "ledger"
+              : "ledger — set balance if wrong";
         return `
         <div class="list-row" style="align-items:start">
-          <span>${escapeHtml(state.accountLabels[account] || account)}${detail}</span>
-          <strong>${currency.format(balance)}</strong>
+          <span>${escapeHtml(state.accountLabels[account] || account)}${isCard ? " · card" : ""} · <small style="color:${source === "live" ? "var(--accent)" : "var(--warn)"}">${srcLabel}</small>${detail}</span>
+          <strong>${currency.format(shown)}${suffix}</strong>
         </div>`;
       }), "No accounts");
+
+      const balanceSelect = document.querySelector("#balance-account");
+      if (balanceSelect) {
+        const current = balanceSelect.value;
+        const cashIds = (state.accounts || [])
+          .filter((a) => a.type === "cash")
+          .map((a) => a.id);
+        const ids = cashIds.length
+          ? cashIds
+          : Object.keys(state.accountLabels).filter((id) => /uwcu|checking|savings/i.test(id));
+        balanceSelect.innerHTML = ids
+          .map(
+            (id) =>
+              `<option value="${escapeHtml(id)}">${escapeHtml(state.accountLabels[id] || id)}</option>`
+          )
+          .join("");
+        if (current && ids.includes(current)) balanceSelect.value = current;
+      }
 
       const importSelect = document.querySelector("#import-account");
       if (importSelect) {
@@ -659,10 +1250,77 @@
     function renderEmptyState(hasTransactions) {
       const note = document.querySelector("#review-count");
       if (hasTransactions) return;
-      note.textContent = "No transactions synced yet";
-      document.querySelector("#transactions").innerHTML =
-        `<tr><td colspan="7" class="empty">No transactions available from Shelf. ` +
-        `Sync a digest/snapshot, or open this app through the laptop hub.</td></tr>`;
+      if (note) note.textContent = "No transactions synced yet";
+      const months = document.querySelector("#month-windows");
+      if (months) {
+        months.innerHTML =
+          `<div class="empty">No transactions available from Shelf. ` +
+          `Sync a digest/snapshot, or open this app through the laptop hub.</div>`;
+      }
+    }
+
+    function accountMapsFromState() {
+      const accountTypes = {};
+      const openingBalances = {};
+      const reportedBalances = {};
+      (state.accounts || []).forEach((account) => {
+        accountTypes[account.id] = account.type;
+        openingBalances[account.id] = Number(account.openingBalance) || 0;
+        if (account.reportedBalance != null && Number.isFinite(Number(account.reportedBalance))) {
+          reportedBalances[account.id] = Number(account.reportedBalance);
+        }
+      });
+      // Fall back from snapshot balances keys if accounts list empty.
+      if (!Object.keys(accountTypes).length && state.snapshot?.balances) {
+        Object.keys(state.snapshot.balances).forEach((id) => {
+          accountTypes[id] = state.snapshot.accountTypes?.[id] || "cash";
+          openingBalances[id] = 0;
+        });
+      }
+      return { accountTypes, openingBalances, reportedBalances };
+    }
+
+    function recomputeLocalSnapshot() {
+      if (typeof MoneyModel?.computeSnapshot !== "function") return null;
+      if (!state.transactions.length) return null;
+      const maps = accountMapsFromState();
+      if (!Object.keys(maps.accountTypes).length) return null;
+      try {
+        const asOfDate =
+          state.asOfDate || MoneyModel.todayIso?.() || new Date().toISOString().slice(0, 10);
+        const snapshot = MoneyModel.computeSnapshot(state.transactions, {
+          asOfDate,
+          weeklySavingsTarget: Number(weeklySavingsInput.value) || 0,
+          checkingReserve: Number(checkingReserveInput?.value) || 0,
+          incomeStreamOverrides: { ...incomeStreamOverrides },
+          accountTypes: maps.accountTypes,
+          openingBalances: maps.openingBalances,
+          reportedBalances: maps.reportedBalances,
+          accountLabels: state.accountLabels || {},
+          accounts: state.accounts || [],
+          bills: state.bills || []
+        });
+        if (typeof MoneyModel.buildCardSchedule === "function") {
+          snapshot.cardSchedule = MoneyModel.buildCardSchedule(
+            state.transactions,
+            state.accounts || [],
+            snapshot,
+            asOfDate
+          );
+        }
+        return snapshot;
+      } catch (error) {
+        console.warn("Local snapshot recompute failed", error);
+        return null;
+      }
+    }
+
+    function applySnapshot(snapshot) {
+      if (!snapshot || snapshot.unchanged) return;
+      state.snapshot = snapshot;
+      if (snapshot.asOfDate) state.asOfDate = snapshot.asOfDate;
+      renderSnapshot();
+      renderRewards();
     }
 
     async function refreshFromShelf() {
@@ -681,9 +1339,12 @@
       // relay additionally exposes raw rows as the source of truth.
       const rows =
         transactionsPayload?.transactions ?? transactionsPayload?.rows ?? [];
-      state.asOfDate = transactionsPayload?.asOfDate || "2026-08-05";
+      state.asOfDate =
+        snapshotPayload?.asOfDate ||
+        transactionsPayload?.asOfDate ||
+        (typeof MoneyModel?.todayIso === "function" ? MoneyModel.todayIso() : null) ||
+        new Date().toISOString().slice(0, 10);
       state.transactions = rows.map((row) => ({ ...row }));
-      state.snapshot = snapshotPayload || null;
 
       const accountList =
         accountsPayload?.accounts ||
@@ -705,6 +1366,22 @@
 
       if (transactionsPayload?.settings) {
         weeklySavingsInput.value = transactionsPayload.settings.weeklySavingsTarget;
+        if (checkingReserveInput && transactionsPayload.settings.checkingReserve != null) {
+          checkingReserveInput.value = transactionsPayload.settings.checkingReserve;
+        }
+        const overrides = transactionsPayload.settings.incomeStreamOverrides || {};
+        Object.keys(incomeStreamOverrides).forEach((key) => {
+          delete incomeStreamOverrides[key];
+        });
+        Object.entries(overrides).forEach(([key, value]) => {
+          incomeStreamOverrides[key] = value;
+        });
+        state.budgetEnvelopes = {
+          ...(transactionsPayload.settings.budgetEnvelopes || {})
+        };
+        state.declinedEnvelopeCategories = [
+          ...(transactionsPayload.settings.declinedEnvelopeCategories || [])
+        ];
       }
 
       state.bills = billsPayload?.bills || [];
@@ -716,10 +1393,105 @@
       } else {
         renderEmptyState(false);
       }
-      renderSnapshot();
-      renderRewards();
+
+      if (snapshotPayload && !snapshotPayload.unchanged) {
+        applySnapshot(snapshotPayload);
+      } else {
+        const local = recomputeLocalSnapshot();
+        if (local) applySnapshot(local);
+        else if (snapshotPayload) applySnapshot(snapshotPayload);
+      }
       await refreshImportBatches();
     }
+
+    async function softRefreshSnapshot() {
+      try {
+        const snapshotPayload = await Shelf.data.get("snapshot");
+        if (snapshotPayload && !snapshotPayload.unchanged) {
+          applySnapshot(snapshotPayload);
+          if (Shelf.rewards?.get) {
+            state.rewards = await Shelf.rewards.get().catch(() => state.rewards);
+            renderRewards();
+            renderCardMetrics();
+          }
+        }
+      } catch (_error) {
+        // Keep current view if hub blips.
+      }
+    }
+
+    document.querySelector("#spend-window")?.addEventListener("change", () => {
+      renderCategoryPanel();
+    });
+
+    document.querySelector("#envelope-suggestions")?.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-category]");
+      if (!button) return;
+      const category = button.dataset.category;
+      if (!category) return;
+      if (button.classList.contains("envelope-accept")) {
+        const raw = window.prompt(
+          `Weekly cap for ${category}`,
+          String(Math.round(Number(button.dataset.limit) || 0))
+        );
+        if (raw == null) return;
+        const limit = Number(raw);
+        if (!Number.isFinite(limit) || limit < 0) return;
+        state.budgetEnvelopes[category] = limit;
+      } else if (button.classList.contains("envelope-decline")) {
+        if (!state.declinedEnvelopeCategories.includes(category)) {
+          state.declinedEnvelopeCategories.push(category);
+        }
+      } else if (button.classList.contains("envelope-remove")) {
+        delete state.budgetEnvelopes[category];
+      }
+      renderBudgetDiagnostics();
+      await saveSettings();
+    });
+
+    document.querySelector("#recategorize-btn")?.addEventListener("click", async () => {
+      if (!Shelf.money?.recategorize) {
+        // Offline: apply MoneyRules in-browser to uncategorized rows.
+        let updated = 0;
+        state.transactions.forEach((tx) => {
+          if (tx.direction !== "out") return;
+          if (tx.category && tx.category !== "uncategorized") return;
+          const next = MoneyRules.categoryFor(tx.merchant || tx.rawMerchant);
+          if (next && next !== tx.category) {
+            tx.category = next;
+            updateReviewState(tx);
+            updated += 1;
+          }
+        });
+        renderTable();
+        renderSnapshot();
+        document.querySelector("#bridge-detail").textContent =
+          `Offline re-label: ${updated} row(s)`;
+        return;
+      }
+      const btn = document.querySelector("#recategorize-btn");
+      if (btn) btn.disabled = true;
+      try {
+        const result = await Shelf.money.recategorize(false);
+        if (result.rewards) state.rewards = result.rewards;
+        document.querySelector("#bridge-detail").textContent =
+          `Re-categorized ${result.updated} row(s)` +
+          (result.byCategory
+            ? " · " +
+              Object.entries(result.byCategory)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([k, n]) => `${k} ${n}`)
+                .join(", ")
+            : "");
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Recategorize failed: ${error.message || error}`;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
 
     document.querySelector("#rewards-optimize")?.addEventListener("click", async () => {
       try {
@@ -783,6 +1555,60 @@
       } catch (error) {
         document.querySelector("#bridge-detail").textContent =
           `Add offer failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#card-schedule")?.addEventListener("click", async (event) => {
+      const btn = event.target.closest(".card-schedule-save");
+      if (!btn) return;
+      const accountId = btn.getAttribute("data-account");
+      if (!accountId) return;
+      const root = btn.closest(".list-row");
+      const statementDay = Number(root?.querySelector(".card-statement-day")?.value) || null;
+      const dueDay = Number(root?.querySelector(".card-due-day")?.value) || null;
+      try {
+        if (!Shelf.accounts?.update) {
+          throw new Error("Account update unavailable on this bridge");
+        }
+        await Shelf.accounts.update(accountId, { statementDay, dueDay });
+        const account = state.accounts.find((row) => row.id === accountId);
+        if (account) {
+          account.statementDay = statementDay;
+          account.dueDay = dueDay;
+        }
+        document.querySelector("#bridge-detail").textContent = "Card schedule saved";
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Card schedule failed: ${error.message || error}`;
+      }
+    });
+
+    document.querySelector("#balance-save")?.addEventListener("click", async () => {
+      const accountId = document.querySelector("#balance-account")?.value;
+      const value = Number(document.querySelector("#balance-value")?.value);
+      if (!accountId || !Number.isFinite(value)) {
+        document.querySelector("#bridge-detail").textContent =
+          "Pick an account and enter the current balance";
+        return;
+      }
+      try {
+        if (!Shelf.accounts?.update) throw new Error("Account update unavailable");
+        await Shelf.accounts.update(accountId, {
+          reportedBalance: value,
+          reportedAt: new Date().toISOString()
+        });
+        const account = state.accounts.find((row) => row.id === accountId);
+        if (account) {
+          account.reportedBalance = value;
+          account.reportedAt = new Date().toISOString();
+        }
+        document.querySelector("#bridge-detail").textContent =
+          `Saved ${state.accountLabels[accountId] || accountId} balance ${currency.format(value)}`;
+        await refreshFromShelf();
+      } catch (error) {
+        document.querySelector("#bridge-detail").textContent =
+          `Balance save failed: ${error.message || error}`;
       }
     });
 
@@ -989,12 +1815,52 @@
       }
     });
 
-    document.querySelector("#transactions").addEventListener("change", async (event) => {
+    function spendDecision(row, tx) {
+      const decision = MoneyBudget.spendPause(
+        tx,
+        state.snapshot?.safeToSpend?.remaining || 0,
+        { asOfDate: state.asOfDate }
+      );
+      if (!decision.required) return Promise.resolve("confirm");
+      return new Promise((resolve) => {
+        const promptRow = document.createElement("tr");
+        promptRow.className = "spend-pause";
+        promptRow.innerHTML = `<td colspan="7">
+          <strong>${escapeHtml(decision.message)}</strong>
+          <button type="button" class="promo-btn" data-answer="confirm">Confirm</button>
+          <button type="button" class="promo-btn" data-answer="cancel">Cancel</button>
+          ${
+            decision.cooldownOffered
+              ? `<button type="button" class="promo-btn" data-answer="sleep">Sleep on it</button>`
+              : ""
+          }
+        </td>`;
+        row.insertAdjacentElement("afterend", promptRow);
+        promptRow.addEventListener("click", (click) => {
+          const button = click.target.closest("button[data-answer]");
+          if (!button) return;
+          const answer = button.dataset.answer;
+          promptRow.remove();
+          resolve(answer);
+        });
+      });
+    }
+
+    document.querySelector("#month-windows")?.addEventListener("change", async (event) => {
       const row = event.target.closest("tr");
       const tx = state.transactions.find((item) => item.id === row?.dataset.id);
       if (!tx) return;
+      const before = {
+        direction: tx.direction,
+        category: tx.category,
+        transferAccount: tx.transferAccount
+      };
 
-      if (event.target.classList.contains("direction")) {
+      const editingCategory = event.target.classList.contains("category");
+      const editingTarget = event.target.classList.contains("target");
+      const editingDirection = event.target.classList.contains("direction");
+
+      if (editingDirection) {
         tx.direction = event.target.value;
         if (tx.direction === "transfer") {
           tx.category = "";
@@ -1010,10 +1876,59 @@
           tx.transferAccount = "";
         }
       }
-      if (event.target.classList.contains("category")) tx.category = event.target.value;
-      if (event.target.classList.contains("target")) tx.transferAccount = event.target.value;
+      if (editingCategory) tx.category = event.target.value;
+      if (editingTarget) tx.transferAccount = event.target.value;
       updateReviewState(tx);
-      renderTable();
+      row.classList.toggle("needs-review", Boolean(tx.needsReview));
+
+      if (editingDirection && before.direction !== "out" && tx.direction === "out") {
+        const decision = await spendDecision(row, tx);
+        if (decision !== "confirm") {
+          if (decision === "sleep") {
+            await Shelf.outbox.push({
+              id: actionId(`cooldown:${tx.id}`),
+              type: "signal.task",
+              source: "money",
+              collectedAt: new Date().toISOString(),
+              data: {
+                title: `Revisit ${tx.merchant || tx.rawMerchant} · ${preciseCurrency.format(tx.amount)}`,
+                dueAt: MoneyBudget.spendPause(tx, 0, { asOfDate: state.asOfDate }).revisitDate,
+                domain: "personal",
+                kind: "money.cooldown",
+                why: "You chose to sleep on this purchase"
+              }
+            });
+          }
+          Object.assign(tx, before);
+          updateReviewState(tx);
+          renderTable();
+          document.querySelector("#bridge-detail").textContent =
+            decision === "sleep" ? "Added to your sleep-on-it list" : "Purchase not logged";
+          return;
+        }
+      }
+
+      // Category/target edits: don't rebuild the table (that closes the select
+      // and feels like the UI "jumps away"). Direction changes still need a
+      // rebuild so category/target controls enable correctly.
+      const local = recomputeLocalSnapshot();
+      if (local) {
+        // Keep card/schedule metrics fresh without wiping the open month table.
+        const prevOpen = state.openMonthKey;
+        state.snapshot = {
+          ...state.snapshot,
+          ...local,
+          cardSchedule: local.cardSchedule || state.snapshot?.cardSchedule
+        };
+        state.openMonthKey = prevOpen;
+        document.querySelector("#net-worth").textContent = currency.format(local.netWorth || 0);
+        document.querySelector("#liquid").textContent = currency.format(local.liquid || 0);
+        document.querySelector("#invested").textContent = currency.format(local.invested || 0);
+        renderCategoryPanel();
+        renderCardMetrics();
+      }
+      if (editingDirection) renderTable();
+
       try {
         await Shelf.outbox.push({
           id: actionId(`money-edit:${tx.id}`),
@@ -1027,14 +1942,32 @@
             transferAccount: tx.transferAccount
           }
         });
-        await refreshFromShelf();
+        // Soft snapshot refresh only — full transaction reload re-renders the
+        // month list and steals focus mid-edit.
+        await softRefreshSnapshot();
+        const note = document.querySelector("#edit-note");
+        if (note) note.value = "Saved to hub";
       } catch (error) {
         document.querySelector("#bridge-detail").textContent =
           `Save failed: ${error.message || error}`;
+        const note = document.querySelector("#edit-note");
+        if (note) note.value = "Save failed — retry edit";
       }
     });
 
+    document.querySelector("#month-windows")?.addEventListener("click", (event) => {
+      const toggle = event.target.closest("button.month-summary");
+      if (!toggle) return;
+      const key = toggle.getAttribute("data-month");
+      if (!key) return;
+      event.preventDefault();
+      state.openMonthKey = state.openMonthKey === key ? null : key;
+      renderTable();
+    });
+
     async function saveSettings() {
+      const local = recomputeLocalSnapshot();
+      if (local) applySnapshot(local);
       await Shelf.outbox.push({
         id: actionId("money-settings"),
         type: "action.settings.update",
@@ -1045,7 +1978,40 @@
       await refreshFromShelf();
     }
 
+    weeklySavingsInput.addEventListener("input", () => {
+      const local = recomputeLocalSnapshot();
+      if (local) applySnapshot(local);
+    });
     weeklySavingsInput.addEventListener("change", () => saveSettings().catch(console.error));
+    checkingReserveInput?.addEventListener("input", () => {
+      const local = recomputeLocalSnapshot();
+      if (local) applySnapshot(local);
+    });
+    checkingReserveInput?.addEventListener("change", () =>
+      saveSettings().catch(console.error)
+    );
+
+    document.querySelector("#income-outlook")?.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-key]");
+      if (!button) return;
+      const key = button.getAttribute("data-key");
+      if (!key) return;
+      event.preventDefault();
+      if (button.classList.contains("income-confirm")) {
+        incomeStreamOverrides[key] = { status: "confirmed" };
+      } else if (button.classList.contains("income-ignore")) {
+        incomeStreamOverrides[key] = { status: "ignored" };
+      } else if (button.classList.contains("income-clear")) {
+        incomeStreamOverrides[key] = null;
+      } else {
+        return;
+      }
+      try {
+        await saveSettings();
+      } catch (error) {
+        console.error(error);
+      }
+    });
 
     async function boot() {
       if (!window.Shelf || typeof Shelf.data?.get !== "function") {
@@ -1065,6 +2031,17 @@
           : "Local sample · no page network";
 
       document.querySelector("#app").hidden = false;
+
+      // Keep hero/metrics fresh while the page stays open.
+      setInterval(() => {
+        if (document.visibilityState === "visible") softRefreshSnapshot();
+      }, 15000);
+      window.addEventListener("focus", () => {
+        refreshFromShelf().catch(() => softRefreshSnapshot());
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") softRefreshSnapshot();
+      });
     }
 
     boot().catch((error) => {

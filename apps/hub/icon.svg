@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Finance Hub">
+  <rect width="128" height="128" rx="28" fill="#0b0f14"/>
+  <rect x="18" y="18" width="92" height="92" rx="22" fill="#121922" stroke="#283544" stroke-width="3"/>
+  <path d="M36 78 V50 h12 v28z M58 78 V38 h12 v40z M80 78 V56 h12 v22z" fill="#5ee0a0"/>
+  <circle cx="96" cy="36" r="10" fill="#74b9ff"/>
+</svg>

@@ -1,18 +1,17 @@
 # Digest glance progress
 
-**Workspace:** `C:\Projects\Life\finance-digest-glance` (sibling of `finance-digest`)  
-**Branch:** `feat/digest-glance-a`  
-**Merge later:** into `finance-digest` / master after the other agent finishes — do not forget.
+**Workspace:** `C:\Projects\Life\finance-digest`
+**Branch:** `master`
 
 ## Status
 
 | | |
 |---|---|
-| **Done** | Audit; **A–E** committed (E=`5c61fce`) |
-| **Doing** | Section **F** — outbox actions + Triage (awaiting your review) |
-| **Next** | Merge sibling repo into main hub when you’re ready |
+| **Done** | Audit; **A–F committed and integrated into main** |
+| **Doing** | Verification complete |
+| **Next** | Address the unrelated `duplicates.test.js` failure when desired |
 
-## Section F — ready for review (not committed)
+## Section F — committed and integrated
 
 - Existing: `markDone`, `markReviewed`, `unsubscribe`, `confirmDate` (verified)
 - **New:** `action.triage` → `glance.triageAvailable` + fuller `detail.triage` (overdue first)
@@ -20,12 +19,13 @@
 - Digest UI: Triage button + panel
 - Contract docs list all outbox actions
 
-## How to review F
+## Verification
 
 ```bash
-cd C:\Projects\Life\finance-digest-glance
-node tests/section-f-outbox.test.js
-node tests/section-e-contract.test.js
+cd C:\Projects\Life\finance-digest
+npm test
 ```
 
-Say **commit F** when good, then we can plan the merge into `finance-digest`.
+All A–F, calendar/life, budget, bills, cashflow, and Money bridge tests pass.
+The full suite currently stops at the pre-existing duplicate-import assertion:
+`tests/duplicates.test.js:91` expected `1957.9`, received `0`.

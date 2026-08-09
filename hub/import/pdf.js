@@ -264,9 +264,21 @@ function rowsFromPdfText(text, accountId, accountType, options = {}) {
   let pending = null;
   let lastBalance = null;
   let collecting = true;
+  const endingBalancesByAccount = {};
+  const endingBalanceDates = {};
 
   function accountTypeFor(id) {
     return accountTypes[id] || accountType || "cash";
+  }
+
+  function noteBalance(accountKey, balance, date) {
+    if (!Number.isFinite(balance) || !accountKey) return;
+    const value = roundCents(Math.abs(balance));
+    const prevDate = endingBalanceDates[accountKey] || "";
+    if (!prevDate || (date && date >= prevDate) || !date) {
+      endingBalancesByAccount[accountKey] = value;
+      if (date) endingBalanceDates[accountKey] = date;
+    }
   }
 
   function flushPending() {
@@ -338,7 +350,10 @@ function rowsFromPdfText(text, accountId, accountType, options = {}) {
         accountTypeFor(currentAccountId)
       )
     });
-    if (balance != null) lastBalance = roundCents(balance);
+    if (balance != null) {
+      lastBalance = roundCents(balance);
+      noteBalance(currentAccountId, balance, row.date);
+    }
   }
 
   for (const line of lines) {
@@ -410,6 +425,16 @@ function rowsFromPdfText(text, accountId, accountType, options = {}) {
   }
 
   flushPending();
+  out.endingBalancesByAccount = endingBalancesByAccount;
+  const primary =
+    endingBalancesByAccount[accountId] ??
+    endingBalancesByAccount["uwcu-checking"] ??
+    Object.values(endingBalancesByAccount)[0];
+  out.endingBalance = Number.isFinite(primary) ? primary : null;
+  out.endingBalanceDate =
+    endingBalanceDates[accountId] ||
+    endingBalanceDates["uwcu-checking"] ||
+    null;
   return out;
 }
 
