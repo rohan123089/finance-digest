@@ -8,36 +8,31 @@
 
 | | |
 |---|---|
-| **Done** | STEP 1 audit; Section **A** committed (`62c84a1`) |
-| **Doing** | Section **B** — completion / progress (awaiting your review) |
-| **Next** | C → D → E → F |
+| **Done** | Audit; **A** (`62c84a1`); **B** (`f89ada0`) |
+| **Doing** | Section **C** — derived values (awaiting your review) |
+| **Next** | D → E → F |
 
-## Section A — shipped
+## Section C — ready for review (not committed)
 
-- Outlook secrets, coverage gaps + `blocksClear`, re-parse change records
-- **Trust Google Calendar**; **Canvas fills gaps**
-
-## Section B — ready for review (not committed)
-
-- Topic `reviewed` / task `done` + phone `markReviewed` / `markDone` (already present)
-- Lecture → topic reviewed as `inferred` (already present); **clearing inferred now skips re-infer**
-- **New:** matching money txn → auto `markBillPaid` (`how: inferred`, reversible via skip + `clearBillPaid`)
-- **New:** `signal.confirmation` / `signal.replySent` → close follow-up tasks as inferred
-- `markReviewed` with `clear:true` undoes topic review
+- `done`/`total` readiness integers on examHorizon + studyNext
+- `examHorizon` ranked by proximity (then weight); `when` uses weekday through 7 days (`Fri`), then `1 wk` / `N wks`
+- `studyNext` picks nearest exam’s unreviewed topic, prefers one with a reading chapter
+- `backlog` open/overdue unchanged
+- **Anchor:** multi-assessment week → `"2 exams and 1 quiz this week — start with …"`; softens under `heavyDay`; never scolding
+- `heavyDay` still clears reading + softens framing; `clearDay` still blocked by coverage gaps
 
 ## Key decisions
 
-1. Calendar wins dates; Canvas fills gaps only.
-2. Auto-closes are inferred + reversible (skip list prevents immediate re-close).
-3. Work stays in `finance-digest-glance` until final merge.
+1. Calendar wins; Canvas fills gaps.
+2. Auto-closes inferred + reversible.
+3. Week pressure window = next 7 days for the multi-count anchor.
 
-## How to review B
+## How to review C
 
 ```bash
 cd C:\Projects\Life\finance-digest-glance
-node tests/section-b-completion.test.js
-node tests/hub-bills.test.js
-node tests/hub-m7.test.js
+node tests/section-c-derived.test.js
+node tests/glance-syllabus.test.js
 ```
 
-Say **commit B** when good, then **go C**.
+Say **commit C** when good, then **go D**.

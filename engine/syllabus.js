@@ -143,7 +143,8 @@ function formatWhen(isoDate, asOfDate) {
   if (days < 0) return "past";
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
-  if (days < 7) {
+  // Through one week out, name the weekday (Fri) — easier to act on than "1 wk".
+  if (days <= 7) {
     const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     return names[new Date(dueMs).getUTCDay()];
   }
@@ -380,9 +381,13 @@ function readinessForAssessment(assessmentId, topics) {
   const tied = (topics || []).filter((t) => t.assessmentId === assessmentId);
   const total = tied.length;
   const done = tied.filter((t) => t.reviewed).length;
-  return { done, total };
+  return { done: Math.trunc(done) || 0, total: Math.trunc(total) || 0 };
 }
 
+/**
+ * Highest-priority not-yet-reviewed topic: nearest confirmed assessment
+ * (by proximity, then weight), then topics with readings, then earlier week.
+ */
 function pickStudyNext(assessments, topics, asOfDate) {
   const upcoming = (assessments || [])
     .filter((a) => a.confirmed && a.date)
@@ -390,14 +395,30 @@ function pickStudyNext(assessments, topics, asOfDate) {
     .sort((a, b) => {
       const d = daysUntil(a.date, asOfDate) - daysUntil(b.date, asOfDate);
       if (d !== 0) return d;
-      return (b.weight || 0) - (a.weight || 0);
+      return (Number(b.weight) || 0) - (Number(a.weight) || 0);
     });
   for (const assessment of upcoming) {
-    const tied = (topics || []).filter(
+    let candidates = (topics || []).filter(
       (t) => t.assessmentId === assessment.id && !t.reviewed
     );
-    if (!tied.length) continue;
-    const topic = tied[0];
+    if (!candidates.length) {
+      // Topics hanging on the course/week without an assessment link.
+      candidates = (topics || []).filter(
+        (t) =>
+          t.courseId === assessment.courseId &&
+          !t.reviewed &&
+          !t.assessmentId
+      );
+    }
+    if (!candidates.length) continue;
+    // Prefer topics with a listed reading, then earlier week.
+    candidates.sort((a, b) => {
+      const aRead = a.readings?.[0] ? 0 : 1;
+      const bRead = b.readings?.[0] ? 0 : 1;
+      if (aRead !== bRead) return aRead - bRead;
+      return (a.week || 999) - (b.week || 999);
+    });
+    const topic = candidates[0];
     const { done, total } = readinessForAssessment(assessment.id, topics);
     return {
       topic: topic.title,
@@ -421,7 +442,7 @@ function buildExamHorizon(assessments, topics, asOfDate) {
       return { assessment: a, until, lead };
     })
     .filter((row) => row.until >= 0 && row.until <= row.lead)
-    .sort((a, b) => a.until - b.until)
+    .sort((a, b) => a.until - b.until || (Number(b.assessment.weight) || 0) - (Number(a.assessment.weight) || 0))
     .map(({ assessment: a }) => {
       const { done, total } = readinessForAssessment(a.id, topics);
       return {
@@ -436,6 +457,95 @@ function buildExamHorizon(assessments, topics, asOfDate) {
         date: a.date
       };
     });
+}
+
+function pluralKind(kind, n) {
+  if (kind === "quiz") return n === 1 ? "quiz" : "quizzes";
+  if (kind === "exam") return n === 1 ? "exam" : "exams";
+  if (kind === "assignment") return n === 1 ? "assignment" : "assignments";
+  return n === 1 ? kind : `${kind}s`;
+}
+
+function summarizeWeekPressure(examHorizon, asOfDate) {
+  const week = (examHorizon || []).filter(
+    (e) => e.date && daysUntil(e.date, asOfDate) >= 0 && daysUntil(e.date, asOfDate) <= 7
+  );
+  if (week.length < 2) return null;
+  const counts = {};
+  week.forEach((e) => {
+    const k = e.kind || "assessment";
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  const order = ["exam", "quiz", "assignment"];
+  const parts = [];
+  order.forEach((k) => {
+    if (counts[k]) parts.push(`${counts[k]} ${pluralKind(k, counts[k])}`);
+  });
+  Object.keys(counts).forEach((k) => {
+    if (!order.includes(k)) parts.push(`${counts[k]} ${pluralKind(k, counts[k])}`);
+  });
+  if (!parts.length) return null;
+  let joined = parts[0];
+  if (parts.length === 2) joined = `${parts[0]} and ${parts[1]}`;
+  if (parts.length > 2) {
+    joined = `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+  }
+  // Capitalize first letter for sentence start.
+  joined = joined.charAt(0).toUpperCase() + joined.slice(1);
+  return { joined, week };
+}
+
+/**
+ * One directional sentence. Never scolding. Softens under heavyDay.
+ */
+function buildGlanceAnchor({
+  heavyDay,
+  clearDay,
+  examHorizon,
+  studyNext,
+  backlog,
+  asOfDate
+}) {
+  if (clearDay) {
+    return "You're clear today — nothing mandatory on the board.";
+  }
+
+  const focus = studyNext?.topic || null;
+  const chapter = studyNext?.reading ? ` — ${studyNext.reading}` : "";
+  const week = summarizeWeekPressure(examHorizon, asOfDate);
+  if (week) {
+    const start = focus || week.week[0]?.name || "the nearest one";
+    if (heavyDay) {
+      return `${week.joined} this week — when you have a beat, start with ${start}${chapter}.`;
+    }
+    return `${week.joined} this week — start with ${start}${chapter}.`;
+  }
+
+  const nearest = examHorizon?.[0];
+  if (nearest) {
+    const readiness =
+      nearest.total > 0 ? ` (${nearest.done} of ${nearest.total} topics)` : "";
+    if (focus) {
+      if (heavyDay) {
+        return `${nearest.name} is ${nearest.when}${readiness}. When you have a beat, start with ${focus}${chapter}.`;
+      }
+      return `${nearest.name} is ${nearest.when}${readiness} — start with ${focus}${chapter}.`;
+    }
+    if (heavyDay) {
+      return `${nearest.name} is ${nearest.when}${readiness}. Keep the day light where you can.`;
+    }
+    return `${nearest.name} is ${nearest.when}${readiness}.`;
+  }
+
+  if (backlog?.overdue > 0) {
+    return heavyDay
+      ? `${backlog.overdue} overdue loop${backlog.overdue === 1 ? "" : "s"} waiting — pick one when you can.`
+      : `${backlog.overdue} overdue · ${backlog.open} open loops.`;
+  }
+  if (backlog?.open > 0) {
+    return `${backlog.open} open loop${backlog.open === 1 ? "" : "s"} on the board.`;
+  }
+  return "Quiet board — check Detail if you want the full picture.";
 }
 
 function looksLikeSyllabusEmail(subject, body) {
@@ -459,5 +569,7 @@ module.exports = {
   readinessForAssessment,
   pickStudyNext,
   buildExamHorizon,
+  buildGlanceAnchor,
+  summarizeWeekPressure,
   looksLikeSyllabusEmail
 };

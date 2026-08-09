@@ -585,35 +585,15 @@ function isOverdueRow(row, asOfDate) {
   return day < asOfDate && (row.kind === "task" || row.kind === "bill" || row.kind === "import");
 }
 
-function buildAnchor({ heavyDay, clearDay, examHorizon, studyNext, backlog }) {
-  if (clearDay) {
-    return "You're clear today — nothing mandatory on the board.";
-  }
-  const nearest = examHorizon?.[0];
-  if (nearest) {
-    const readiness =
-      nearest.total > 0 ? ` (${nearest.done} of ${nearest.total} topics)` : "";
-    if (studyNext?.topic) {
-      const chapter = studyNext.reading ? ` — ${studyNext.reading}` : "";
-      if (heavyDay) {
-        return `${nearest.name} is ${nearest.when}${readiness}. When you have a beat, start with ${studyNext.topic}${chapter}.`;
-      }
-      return `${nearest.name} is ${nearest.when}${readiness} — start with ${studyNext.topic}${chapter}.`;
-    }
-    if (heavyDay) {
-      return `${nearest.name} is ${nearest.when}${readiness}. Keep the day light where you can.`;
-    }
-    return `${nearest.name} is ${nearest.when}${readiness}.`;
-  }
-  if (backlog?.overdue > 0) {
-    return heavyDay
-      ? `${backlog.overdue} overdue loop${backlog.overdue === 1 ? "" : "s"} waiting — pick one when you can.`
-      : `${backlog.overdue} overdue · ${backlog.open} open loops.`;
-  }
-  if (backlog?.open > 0) {
-    return `${backlog.open} open loop${backlog.open === 1 ? "" : "s"} on the board.`;
-  }
-  return "Quiet board — check Detail if you want the full picture.";
+function buildAnchor({ heavyDay, clearDay, examHorizon, studyNext, backlog, asOfDate }) {
+  return syllabus.buildGlanceAnchor({
+    heavyDay,
+    clearDay,
+    examHorizon,
+    studyNext,
+    backlog,
+    asOfDate
+  });
 }
 
 function inferTopicCoverageFromCalendar(db) {
@@ -1090,7 +1070,8 @@ function buildDigest(db) {
     clearDay,
     examHorizon,
     studyNext,
-    backlog: backlogCounts
+    backlog: backlogCounts,
+    asOfDate
   });
 
   const detailBacklog = openLoops.map((row) => ({
