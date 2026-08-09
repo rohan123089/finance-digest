@@ -511,6 +511,12 @@ function aiFlagStillRelevant(flag, snapshot) {
 function isLearnedMutedItem(db, item) {
   if (!item) return false;
   if (item.type !== "signal.link") return false;
+  return sourceHasMute(db, item);
+}
+
+/** Mute/drop hints for any item's source keys (group, sender, calendar, …). */
+function sourceHasMute(db, item) {
+  if (!item) return false;
   const data = item.data || {};
   const hints = dbApi.resolveDigestLearned(db, {
     from: data.from || data.sender || data.sharedBy,
@@ -522,9 +528,7 @@ function isLearnedMutedItem(db, item) {
     sourceRef: data.sourceRef,
     data
   });
-  if (hints.mute || hints.forceKind === "drop") return true;
-  if (hints.junkReading) return true;
-  return false;
+  return Boolean(hints.mute || hints.forceKind === "drop" || hints.junkReading);
 }
 
 function isProtectedTodayRow(row) {
@@ -541,6 +545,72 @@ function isProtectedTodayRow(row) {
     return true;
   }
   return false;
+}
+
+/**
+ * Assembly assert: a muted class group must never swallow a deadline,
+ * mandatory event, due-date change, or assessment horizon row.
+ * Records violations on meta; throws when ASSERT_PROTECTED_TIER=1.
+ */
+function assertProtectedTier(db, { items, today, watching, reading, examHorizon, asOfDate }) {
+  const violations = [];
+  const asOf =
+    asOfDate ||
+    dbApi.getSettings(db).asOfDate ||
+    new Date().toISOString().slice(0, 10);
+
+  (items || []).forEach((item) => {
+    if (
+      item.type !== "signal.task" &&
+      item.type !== "signal.event" &&
+      item.type !== "signal.deadline"
+    ) {
+      return;
+    }
+    const status = item.executed ? item.result?.status || "done" : "open";
+    if (status === "done" || status === "going") return;
+    if (item.type === "signal.event" && isNoiseDigestEvent(item)) return;
+    if (
+      (item.type === "signal.task" || item.type === "signal.deadline") &&
+      isNoiseDigestTask(item)
+    ) {
+      return;
+    }
+    if (item.type === "signal.task" && isStaleCanvasTask(item, asOf)) return;
+    if (!sourceHasMute(db, item)) return;
+
+    const present =
+      (today || []).some((row) => row.id === item.id) ||
+      (watching || []).some((row) => row.id === item.id);
+    if (!present) {
+      violations.push(
+        `muted source swallowed protected ${item.type} ${item.id}`
+      );
+    }
+  });
+
+  (reading || []).forEach((row) => {
+    const item = (items || []).find((i) => i.id === row.id);
+    if (item && isLearnedMutedItem(db, item)) {
+      violations.push(`muted reading leaked into glance reading ${row.id}`);
+    }
+  });
+
+  // Assessments / examHorizon are never mute-keyed — presence is by construction.
+  void examHorizon;
+
+  const msg = violations.length
+    ? `Protected-tier violation: ${violations.join("; ")}`
+    : "";
+  try {
+    dbApi.setMeta(db, "protectedTierViolation", msg);
+  } catch (_e) {
+    // meta may be unavailable in some fixtures
+  }
+  if (violations.length && process.env.ASSERT_PROTECTED_TIER === "1") {
+    throw new Error(msg);
+  }
+  return violations;
 }
 
 function glanceKind(row) {
@@ -1079,6 +1149,16 @@ function buildDigest(db) {
     overdue: isOverdueRow(row, asOfDate)
   }));
 
+  // Protected-tier assembly assert (mutes never hide deadlines / assessments).
+  assertProtectedTier(db, {
+    items,
+    today,
+    watching,
+    reading,
+    examHorizon,
+    asOfDate
+  });
+
   return {
     v: CURRENT_VERSION,
     generatedAt: new Date().toISOString(),
@@ -1263,5 +1343,8 @@ module.exports = {
   executePendingActions,
   expandIncomingLifeItem,
   buildIcsForSyncItem,
-  icsForItemId
+  icsForItemId,
+  assertProtectedTier,
+  isLearnedMutedItem,
+  isProtectedTodayRow
 };

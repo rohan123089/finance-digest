@@ -8,31 +8,29 @@
 
 | | |
 |---|---|
-| **Done** | Audit; **A** (`62c84a1`); **B** (`f89ada0`) |
-| **Doing** | Section **C** — derived values (awaiting your review) |
-| **Next** | D → E → F |
+| **Done** | Audit; **A** (`62c84a1`); **B** (`f89ada0`); **C** (`f0922bc`) |
+| **Doing** | Section **D** — protected-tier (awaiting your review) |
+| **Next** | E → F |
 
-## Section C — ready for review (not committed)
+## Section D — ready for review (not committed)
 
-- `done`/`total` readiness integers on examHorizon + studyNext
-- `examHorizon` ranked by proximity (then weight); `when` uses weekday through 7 days (`Fri`), then `1 wk` / `N wks`
-- `studyNext` picks nearest exam’s unreviewed topic, prefers one with a reading chapter
-- `backlog` open/overdue unchanged
-- **Anchor:** multi-assessment week → `"2 exams and 1 quiz this week — start with …"`; softens under `heavyDay`; never scolding
-- `heavyDay` still clears reading + softens framing; `clearDay` still blocked by coverage gaps
+- Mutes still apply only to `signal.link` (reading/social)
+- Assembly calls `assertProtectedTier`: muted sources cannot swallow tasks/events/deadlines; muted reading cannot leak
+- Violations recorded on meta `protectedTierViolation`; hard-throw if `ASSERT_PROTECTED_TIER=1`
+- Test: muted class group keeps due-date change + mandatory event + examHorizon; hides meme link
 
 ## Key decisions
 
 1. Calendar wins; Canvas fills gaps.
 2. Auto-closes inferred + reversible.
-3. Week pressure window = next 7 days for the multi-count anchor.
+3. Protected-tier assert is soft by default (meta), hard under env flag.
 
-## How to review C
+## How to review D
 
 ```bash
 cd C:\Projects\Life\finance-digest-glance
-node tests/section-c-derived.test.js
+node tests/section-d-protected.test.js
 node tests/glance-syllabus.test.js
 ```
 
-Say **commit C** when good, then **go D**.
+Say **commit D** when good, then **go E**.
