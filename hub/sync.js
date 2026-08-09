@@ -8,6 +8,7 @@ const dbApi = require("./db.js");
 const life = require("../engine/life.js");
 const billsEngine = require("../engine/bills.js");
 const syllabus = require("../engine/syllabus.js");
+const completion = require("../engine/completion.js");
 
 const CURRENT_VERSION = 1;
 const PRIOR_VERSION = 0;
@@ -318,6 +319,16 @@ function executePendingActions(db) {
 
     if (item.type === "action.markReviewed") {
       const topicId = item.data?.topicId || item.data?.targetRef?.topicId;
+      if (topicId && (item.data?.clear === true || item.data?.undo === true)) {
+        dbApi.clearTopicReviewed(db, topicId);
+        dbApi.markActionExecuted(
+          db,
+          item.id,
+          "executed",
+          `Cleared review ${topicId}`
+        );
+        return;
+      }
       if (topicId) {
         dbApi.markTopicReviewed(db, topicId, "manual");
       }
@@ -328,6 +339,32 @@ function executePendingActions(db) {
         topicId ? `Reviewed topic ${topicId}` : "markReviewed missing topicId"
       );
       return;
+    }
+
+    // Reverse an inferred bill close (re-open that period's nag).
+    if (
+      (item.type === "action.bill.unpaid" || item.type === "action.unmarkDone") &&
+      item.data
+    ) {
+      const ref = item.data.targetRef || item.data;
+      const billId = ref.billId || null;
+      const taskId = ref.taskId || ref.itemId || item.data.taskId || null;
+      if (billId) {
+        const periodKey = ref.periodKey || null;
+        dbApi.clearBillPaid(db, billId);
+        if (periodKey) {
+          completion.skipInference(dbApi, db, `bill:${billId}:${periodKey}`);
+        }
+        dbApi.markActionExecuted(db, item.id, "executed", `Reopened bill ${billId}`);
+        return;
+      }
+      if (taskId && item.type === "action.unmarkDone") {
+        // Re-open: clear executed flag by upserting a fresh open copy is heavy —
+        // skip re-inference and leave a note; caller may re-push the task.
+        completion.skipInference(dbApi, db, taskId);
+        dbApi.markActionExecuted(db, item.id, "executed", `Undo inferred close ${taskId}`);
+        return;
+      }
     }
 
     if (item.type === "action.confirmDate") {
@@ -595,11 +632,18 @@ function inferTopicCoverageFromCalendar(db) {
     if (startDay === asOf && status !== "going" && status !== "done") return;
     const title = String(event.data?.title || "").toLowerCase();
     topics.forEach((topic) => {
+      if (completion.isInferenceSkipped(dbApi, db, topic.id)) return;
       const needle = String(topic.title || "").toLowerCase();
       const lecture = String(topic.lectureRef || "").toLowerCase();
       if (!needle || needle.length < 4) return;
       if (title.includes(needle) || (lecture && title.includes(lecture))) {
         dbApi.markTopicReviewed(db, topic.id, "inferred");
+        completion.recordInferredClose(dbApi, db, {
+          kind: "topic",
+          id: topic.id,
+          evidence: event.id,
+          detail: "Inferred from calendar attendance"
+        });
       }
     });
   });
@@ -648,6 +692,9 @@ function eventDedupeKey(title, start) {
 function buildDigest(db) {
   const settings = dbApi.getSettings(db);
   const asOfDate = settings.asOfDate || new Date().toISOString().slice(0, 10);
+  // Auto-closes first so this digest reflects inferred done/paid state.
+  completion.inferBillPaidFromTransactions(dbApi, db);
+  completion.inferFollowUpsFromReplies(dbApi, db);
   const items = dbApi.listSyncItems(db);
   const today = [];
   const watching = [];
@@ -803,6 +850,12 @@ function buildDigest(db) {
         source: item.data.sharedBy || item.source,
         score: readingScore(item)
       });
+    } else if (
+      item.type === "signal.confirmation" ||
+      item.type === "signal.replySent"
+    ) {
+      // Used for inferred loop closes only — never on the glance.
+      return;
     } else if (item.type === "action.unsubscribe" || item.type === "signal.junk") {
       junk.push({
         id: item.id,

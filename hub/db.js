@@ -1855,15 +1855,21 @@ function listSyncItems(db) {
     }));
 }
 
-function markActionExecuted(db, id, status, detail) {
+function markActionExecuted(db, id, status, detail, extra = {}) {
   const now = new Date().toISOString();
   const item = db.prepare("SELECT * FROM sync_items WHERE id = ?").get(id);
   if (!item) return;
+  const payload = {
+    status,
+    detail,
+    how: extra.how || null,
+    reversible: extra.how === "inferred"
+  };
   db.prepare(
     `UPDATE sync_items
      SET executed = 1, result_json = ?, updated_at = ?
      WHERE id = ?`
-  ).run(JSON.stringify({ status, detail }), now, id);
+  ).run(JSON.stringify(payload), now, id);
   db.prepare(`
     INSERT INTO action_log (id, type, target_ref_json, status, detail, executed_at)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -1880,6 +1886,17 @@ function markActionExecuted(db, id, status, detail) {
     now
   );
   if (typeof db._persist === "function") db._persist();
+}
+
+function clearBillPaid(db, id) {
+  const existing = getBill(db, id);
+  if (!existing) throw new Error(`Unknown bill id: ${id}`);
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE bills SET last_paid_for = NULL, updated_at = ? WHERE id = ?`
+  ).run(now, id);
+  if (typeof db._persist === "function") db._persist();
+  return getBill(db, id);
 }
 
 function getCursor(db, name) {
@@ -2763,9 +2780,18 @@ function markTopicReviewed(db, topicId, how = "manual") {
 function clearTopicReviewed(db, topicId) {
   const row = db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId);
   if (!row) return null;
+  const wasInferred = String(row.reviewed_how || "") === "inferred";
   db.prepare(
     `UPDATE topics SET reviewed = 0, reviewed_how = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ?`
   ).run(new Date().toISOString(), topicId);
+  if (wasInferred) {
+    try {
+      const completion = require("../engine/completion.js");
+      completion.skipInference(module.exports, db, topicId);
+    } catch (_e) {
+      // ignore
+    }
+  }
   return mapTopic(db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId));
 }
 
@@ -2914,6 +2940,7 @@ module.exports = {
   getBill,
   upsertBill,
   markBillPaid,
+  clearBillPaid,
   deleteBill,
   listRewardsRules,
   getRewardsRule,

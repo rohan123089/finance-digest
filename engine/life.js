@@ -16,15 +16,22 @@ const PERSONAL_RE =
   /\b(dentist|doctor|family|birthday|rsvp|party|vacation|lease|rent due|utility)\b/i;
 
 const DEADLINE_RE =
-  /\b(?:due(?:\s+(?:by|on|date))?|deadline|submit(?:\s+by)?|complete(?:\s+by)?|rsvp\s+by)\b[:\s-]*([^\n.!?]{3,60})/i;
+  /\b(?:due(?:\s+(?:by|on|date))?|deadline|submit(?:\s+by)?|complete(?:\s+by)?|rsvp\s+by|sign[- ]?ups?\s+close|apply by|applications?\s+close|fill(?:\s+(?:it|this|the form))?\s+out by)\b[:\s-]*([^\n.!?]{3,60})/i;
 const EVENT_RE =
-  /\b(?:meeting|call|interview|appointment|class|lecture|dinner|lunch|brunch|drinks|hang(?:\s*out)?|party|game night|who's in|who(?:'s| is) (?:free|coming)|come over|see you|lets meet|let's meet|tonight|this weekend)\b[^\n.!?]{0,100}/i;
+  /\b(?:meeting|call|interview|appointment|class|lecture|dinner|lunch|brunch|drinks|hang(?:\s*out)?|party|game night|trivia|training|who's in|who(?:'s| is) (?:free|coming)|come (?:over|join|to)|see you|lets meet|let's meet|hosting|tonight|this weekend)\b[^\n.!?]{0,100}/i;
+/** Chat-only: require a time cue or near-term day word — bare weekdays alone are too noisy. */
 const CHAT_EVENT_RE =
-  /\b(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b|\b(?:tonight|tmrw|tmr|tomorrow|this weekend)\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i;
+  /\b(?:tonight|tmrw|tmr|tomorrow|this weekend)\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?\b[^\n]{0,40}\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i;
 const TASK_RE =
-  /\b(?:todo|to-?do|action required|please (?:complete|review|submit|confirm)|reminder[:\s]|don't forget|follow[- ]?up)\b/i;
+  /\b(?:todo|to-?do|action required|please (?:complete|review|submit|confirm|fill|sign|apply|register)|reminder[:\s]|don't forget|follow[- ]?up|sign[- ]?up|register|volunteer|fill out|applications?\s+(?:are\s+)?open|still missing)\b/i;
 const STATEMENT_RE =
   /\b(?:e-?statement|account statement|monthly statement|your statement|statement (?:is|for|ready|available)|statement notification)\b/i;
+/** GroupMe / chat system chatter that should never become Digest work. */
+const CHAT_NOISE_RE =
+  /\b(?:has joined the group|have joined the group|joined the group|has left the group|have left the group|left the group|added .+ to the group|removed .+ from the group|pinned a message|unpinned a message|this message was deleted|a message was deleted|changed the group(?:'s|s)? (?:name|avatar|topic)|liked (?:your|a) message|named the group|updated the group(?:'s|s)? nickname)\b/i;
+/** Receipts / booking confirmations — informational, not open Digest work. */
+const CONFIRMATION_RE =
+  /\b(?:appointment|registration|booking|reservation|order)\s+confirmation\b|\b(?:payment|order)\s+(?:confirmation|confirmed|is complete|was (?:successful|completed|received))\b|\bconfirmed:\s*your\s+(?:payment|order|purchase)\b|\byour\s+(?:payment|purchase)\s+(?:to\b.+?\s+)?is complete\b/i;
 const URL_RE = /https?:\/\/[^\s<>"')]+/gi;
 
 /** Map statement email clues → local Money account ids (PDF/CSV/OFX import targets). */
@@ -200,7 +207,43 @@ function isChatSource(source) {
   return s === "sms" || s === "groupme" || s === "imessage" || s === "chat";
 }
 
+function isChatNoiseText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return true;
+  return CHAT_NOISE_RE.test(raw);
+}
+
+function isConfirmationText(text) {
+  return CONFIRMATION_RE.test(String(text || ""));
+}
+
+/**
+ * GroupMe system / membership / pin / delete lines — not actionable Digest work.
+ * Prefer structured flags when present; fall back to text patterns.
+ */
+function isGroupMeNoiseMessage(message) {
+  if (!message || typeof message !== "object") return true;
+  if (message.system === true) return true;
+  const senderType = String(message.sender_type || "").toLowerCase();
+  if (senderType === "system" || senderType === "service") return true;
+  const eventType = String(message.event?.type || message.event?.name || "").toLowerCase();
+  if (eventType) {
+    // Keep GroupMe calendar / scheduled-event payloads — those can be real plans.
+    if (/^(calendar\.|event\.(?:create|update|starting))/.test(eventType)) {
+      // fall through to text extraction
+    } else if (
+      /^(membership\.|message\.|group\.|channel\.|poll\.|reaction\.)/.test(eventType)
+    ) {
+      return true;
+    }
+  }
+  return isChatNoiseText(message.text || message.subject || "");
+}
+
 function extractFromChat(message, options = {}) {
+  if (isChatNoiseText(message.text || message.subject || "")) {
+    return [];
+  }
   return extractFromMessage(
     {
       ...message,
@@ -226,7 +269,14 @@ function extractFromMessage(message, options = {}) {
   const from = String(message.from || "");
   const asOf = options.asOf instanceof Date ? options.asOf : new Date();
   const receivedAt = message.receivedAt || asOf.toISOString();
-  const domain = normalizeDomain(message.domain || inferDomain(text, from));
+  const hints = options.learnedHints || {};
+
+  // Protected tier: mute/drop suppress reading/social links only — never tasks/events/deadlines.
+  const muteReadingOnly = Boolean(hints.mute || hints.forceKind === "drop");
+
+  let domain = normalizeDomain(
+    hints.domain || message.domain || inferDomain(text, from)
+  );
   const items = [];
 
   // Bank/credit-union statements → remind to import PDF/CSV/OFX (SimpleFIN covers live sync elsewhere).
@@ -253,18 +303,79 @@ function extractFromMessage(message, options = {}) {
         kind: "import.statement",
         accountId,
         accountLabel: label,
-        preferredFormat: isUwcu ? "pdf" : "auto"
+        preferredFormat: isUwcu ? "pdf" : "auto",
+        from: from || null,
+        mailbox: message.mailbox || null
       }
     });
     return items;
   }
 
+  // Pure confirmations (appointment booked, payment landed) are not open Today
+  // work — emit a close-hint so follow-up loops can auto-resolve as inferred.
+  // Note: "is complete" can trip DEADLINE_RE via "complete"; confirmation wins.
+  if (CONFIRMATION_RE.test(text) && !TASK_RE.test(text)) {
+    items.push({
+      id: `life:confirm:${idBase}`,
+      type: "signal.confirmation",
+      source: message.source || "email",
+      at: receivedAt,
+      data: {
+        title: titleFrom(subject, "Confirmation"),
+        subject,
+        from: from || null,
+        why: "confirmation",
+        sourceRef: message.sourceRef || `email:${idBase}`
+      }
+    });
+    return items;
+  }
+
+  // Outbound / sent reply — closes matching follow-up loops (inferred).
+  if (
+    message.sent === true ||
+    message.outbound === true ||
+    /\b(?:^|\s)re:\s/i.test(subject)
+  ) {
+    const looksOutbound =
+      message.sent === true ||
+      message.outbound === true ||
+      Boolean(message.labelIds?.includes?.("SENT"));
+    if (looksOutbound || message.replySent === true) {
+      items.push({
+        id: `life:reply:${idBase}`,
+        type: "signal.replySent",
+        source: message.source || "email",
+        at: receivedAt,
+        data: {
+          title: titleFrom(subject, "Sent reply"),
+          subject,
+          from: from || null,
+          why: "sent reply",
+          sourceRef: message.sourceRef || `email:${idBase}`
+        }
+      });
+    }
+  }
+
+  const forceKind = hints.forceKind || null;
   const deadlineMatch = text.match(DEADLINE_RE);
   const dueAt =
     parseLooseDate(deadlineMatch?.[1], asOf) ||
     parseLooseDate(text, asOf);
 
-  if (deadlineMatch || (TASK_RE.test(text) && dueAt)) {
+  const wantTask =
+    forceKind === "task" ||
+    (!forceKind &&
+      (deadlineMatch || (TASK_RE.test(text) && dueAt) || TASK_RE.test(text)));
+  const wantEvent =
+    forceKind === "event" ||
+    (!forceKind &&
+      !wantTask &&
+      (EVENT_RE.test(text) ||
+        (isChatSource(message.source) && CHAT_EVENT_RE.test(text))));
+
+  if (wantTask && (deadlineMatch || dueAt || TASK_RE.test(text) || forceKind === "task")) {
     items.push({
       id: `life:task:${idBase}`,
       type: "signal.task",
@@ -275,10 +386,14 @@ function extractFromMessage(message, options = {}) {
         dueAt: dueAt || null,
         domain,
         sourceRef: message.sourceRef || `email:${idBase}`,
-        why: deadlineMatch ? "deadline language" : "task language"
+        why: forceKind === "task" ? "learned force task" : deadlineMatch ? "deadline language" : "task language",
+        from: from || null,
+        groupId: message.groupId || null,
+        mailbox: message.mailbox || null,
+        accountSlot: message.accountSlot || null
       }
     });
-  } else if (EVENT_RE.test(text) || (isChatSource(message.source) && CHAT_EVENT_RE.test(text))) {
+  } else if (wantEvent) {
     const start =
       dueAt ||
       parseLooseDate(text, asOf) ||
@@ -294,21 +409,12 @@ function extractFromMessage(message, options = {}) {
         start,
         domain,
         sourceRef: message.sourceRef || `${message.source || "email"}:${idBase}`,
-        dismissible: true
-      }
-    });
-  } else if (TASK_RE.test(text)) {
-    items.push({
-      id: `life:task:${idBase}`,
-      type: "signal.task",
-      source: message.source || "email",
-      at: receivedAt,
-      data: {
-        title: titleFrom(subject, "Task"),
-        dueAt: null,
-        domain,
-        sourceRef: message.sourceRef || `email:${idBase}`,
-        why: "task language"
+        dismissible: true,
+        groupId: message.groupId || null,
+        calendarId: message.calendarId || null,
+        from: from || null,
+        mailbox: message.mailbox || null,
+        accountSlot: message.accountSlot || null
       }
     });
   }
@@ -317,7 +423,14 @@ function extractFromMessage(message, options = {}) {
   // Only emit reading links when we did not already promote this message to life work,
   // or when it looks like a newsletter / plain share.
   if (urls.length && items.length === 0) {
+    if (muteReadingOnly || hints.junkReading) return items;
     const cleaned = urls[0].replace(/[.,;:]+$/, "");
+    let host = "";
+    try {
+      host = new URL(cleaned).hostname.replace(/^www\./, "");
+    } catch (_error) {
+      host = "";
+    }
     items.push({
       id: `life:link:${idBase}`,
       type: "signal.link",
@@ -325,10 +438,15 @@ function extractFromMessage(message, options = {}) {
       at: receivedAt,
       data: {
         url: cleaned,
+        host: host || null,
         title: titleFrom(subject, cleaned),
         sharedBy: message.sharedBy || from || "email",
+        from: from || null,
         context: null,
-        domain
+        domain,
+        listIds: message.listIds || [],
+        mailbox: message.mailbox || null,
+        groupId: message.groupId || null
       }
     });
   }
@@ -346,5 +464,8 @@ module.exports = {
   matchStatementAccount,
   isStatementMessage,
   isChatSource,
+  isChatNoiseText,
+  isConfirmationText,
+  isGroupMeNoiseMessage,
   normalizeDomain
 };
