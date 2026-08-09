@@ -5,6 +5,7 @@ const path = require("node:path");
 const Database = require("better-sqlite3");
 const Rules = require("../engine/rules.js");
 const Model = require("../engine/model.js");
+const Learned = require("../engine/learned.js");
 
 const ROOT = path.join(__dirname, "..");
 const DEFAULT_DB_PATH = path.join(ROOT, "data", "finance.db");
@@ -227,18 +228,120 @@ function migrate(db) {
       skipped_count INTEGER NOT NULL DEFAULT 0,
       by_account_json TEXT NOT NULL DEFAULT '{}'
     );
+
+    CREATE TABLE IF NOT EXISTS learned_rules (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      match_kind TEXT NOT NULL,
+      match_key TEXT NOT NULL,
+      effect TEXT NOT NULL,
+      effect_value TEXT NOT NULL DEFAULT '{}',
+      priority INTEGER NOT NULL DEFAULT 100,
+      source TEXT NOT NULL DEFAULT 'user_action',
+      evidence_json TEXT,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS learned_rules_uq
+      ON learned_rules(scope, match_kind, match_key, effect);
+
+    CREATE TABLE IF NOT EXISTS courses (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      term TEXT,
+      canvas_course_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS syllabus_sources (
+      id TEXT PRIMARY KEY,
+      course_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      path TEXT,
+      content_hash TEXT,
+      parsed_at TEXT,
+      raw_ref TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS assessments (
+      id TEXT PRIMARY KEY,
+      course_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      date TEXT,
+      time TEXT,
+      weight REAL,
+      source TEXT NOT NULL DEFAULT 'syllabus',
+      confidence TEXT NOT NULL DEFAULT 'high',
+      lead_days INTEGER NOT NULL DEFAULT 7,
+      confirmed INTEGER NOT NULL DEFAULT 0,
+      canvas_date TEXT,
+      parsed_date TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS topics (
+      id TEXT PRIMARY KEY,
+      course_id TEXT NOT NULL,
+      assessment_id TEXT,
+      title TEXT NOT NULL,
+      week INTEGER,
+      lecture_ref TEXT,
+      readings_json TEXT NOT NULL DEFAULT '[]',
+      reviewed INTEGER NOT NULL DEFAULT 0,
+      reviewed_how TEXT,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS assessments_course_idx ON assessments(course_id);
+    CREATE INDEX IF NOT EXISTS topics_assessment_idx ON topics(assessment_id);
   `);
 
   ensureColumn(db, "transactions", "import_batch_id", "TEXT");
   ensureColumn(db, "transactions", "duplicate_of", "TEXT");
   ensureColumn(db, "transactions", "fingerprint", "TEXT");
   ensureColumn(db, "accounts", "holdings_json", "TEXT");
+  ensureColumn(db, "accounts", "reported_balance", "REAL");
+  ensureColumn(db, "accounts", "reported_at", "TEXT");
+  ensureColumn(db, "accounts", "statement_day", "INTEGER");
+  ensureColumn(db, "accounts", "due_day", "INTEGER");
   ensureColumn(db, "import_batches", "content_hash", "TEXT");
   backfillFingerprints(db);
-  setMeta(db, "schemaVersion", "6");
+  seedCardScheduleDefaults(db);
+  setMeta(db, "schemaVersion", "9");
   setMeta(db, "encryption", "sqlcipher");
   seedDefaultBills(db);
   seedRewardsBaselines(db);
+}
+
+function seedCardScheduleDefaults(db) {
+  // Amex statement often closes ~2nd; due ~25 days later. Discover similar.
+  const defaults = [
+    { id: "amex", statementDay: 2, dueDay: 27 },
+    { id: "discover", statementDay: 15, dueDay: 10 }
+  ];
+  defaults.forEach((row) => {
+    const existing = db.prepare("SELECT id, statement_day, due_day FROM accounts WHERE id = ?").get(row.id);
+    if (!existing) return;
+    if (existing.statement_day == null) {
+      db.prepare("UPDATE accounts SET statement_day = ? WHERE id = ?").run(
+        row.statementDay,
+        row.id
+      );
+    }
+    if (existing.due_day == null) {
+      db.prepare("UPDATE accounts SET due_day = ? WHERE id = ?").run(row.dueDay, row.id);
+    }
+  });
 }
 
 function backfillFingerprints(db) {
@@ -702,6 +805,17 @@ function rowToAccount(row) {
     label: row.label,
     type: row.type,
     openingBalance: row.opening_balance,
+    reportedBalance:
+      row.reported_balance == null || row.reported_balance === ""
+        ? null
+        : Number(row.reported_balance),
+    reportedAt: row.reported_at || null,
+    statementDay:
+      row.statement_day == null || row.statement_day === ""
+        ? null
+        : Number(row.statement_day),
+    dueDay:
+      row.due_day == null || row.due_day === "" ? null : Number(row.due_day),
     simplefinAccountId: row.simplefin_account_id || null,
     holdings,
     createdAt: row.created_at,
@@ -725,6 +839,7 @@ function getAccountMaps(db) {
   const accounts = listAccounts(db);
   const accountTypes = {};
   const openingBalances = {};
+  const reportedBalances = {};
   const labels = {};
   const accountHoldings = {};
   accounts.forEach((account) => {
@@ -732,8 +847,18 @@ function getAccountMaps(db) {
     openingBalances[account.id] = account.openingBalance;
     labels[account.id] = account.label;
     if (account.holdings?.length) accountHoldings[account.id] = account.holdings;
+    if (account.reportedBalance != null && Number.isFinite(account.reportedBalance)) {
+      reportedBalances[account.id] = account.reportedBalance;
+    }
   });
-  return { accountTypes, openingBalances, labels, accounts, accountHoldings };
+  return {
+    accountTypes,
+    openingBalances,
+    reportedBalances,
+    labels,
+    accounts,
+    accountHoldings
+  };
 }
 
 function upsertAccountRow(db, account) {
@@ -785,6 +910,50 @@ function upsertAccountRow(db, account) {
     createdAt: now,
     updatedAt: now
   });
+
+  if (
+    account.reportedBalance !== undefined ||
+    account.reportedAt !== undefined ||
+    account.statementDay !== undefined ||
+    account.dueDay !== undefined
+  ) {
+    const current = getAccount(db, id);
+    db.prepare(`
+      UPDATE accounts
+      SET reported_balance = @reportedBalance,
+          reported_at = @reportedAt,
+          statement_day = @statementDay,
+          due_day = @dueDay,
+          updated_at = @updatedAt
+      WHERE id = @id
+    `).run({
+      id,
+      reportedBalance:
+        account.reportedBalance !== undefined
+          ? account.reportedBalance == null
+            ? null
+            : Number(account.reportedBalance)
+          : current.reportedBalance,
+      reportedAt:
+        account.reportedAt !== undefined
+          ? account.reportedAt
+          : current.reportedAt,
+      statementDay:
+        account.statementDay !== undefined
+          ? account.statementDay == null
+            ? null
+            : Number(account.statementDay)
+          : current.statementDay,
+      dueDay:
+        account.dueDay !== undefined
+          ? account.dueDay == null
+            ? null
+            : Number(account.dueDay)
+          : current.dueDay,
+      updatedAt: now
+    });
+  }
+
   return getAccount(db, id);
 }
 
@@ -811,7 +980,16 @@ function updateAccount(db, id, patch) {
       patch.simplefinAccountId !== undefined
         ? patch.simplefinAccountId
         : existing.simplefinAccountId,
-    holdings: patch.holdings !== undefined ? patch.holdings : existing.holdings
+    holdings: patch.holdings !== undefined ? patch.holdings : existing.holdings,
+    reportedBalance:
+      patch.reportedBalance !== undefined
+        ? patch.reportedBalance
+        : existing.reportedBalance,
+    reportedAt:
+      patch.reportedAt !== undefined ? patch.reportedAt : existing.reportedAt,
+    statementDay:
+      patch.statementDay !== undefined ? patch.statementDay : existing.statementDay,
+    dueDay: patch.dueDay !== undefined ? patch.dueDay : existing.dueDay
   };
   const updated = upsertAccountRow(db, next);
   bumpSettingsStamp(db);
@@ -942,6 +1120,7 @@ function getDataCursors(db) {
     billsCursor: bills?.m || "",
     syncCursor: sync?.m || "",
     settingsStamp: getMeta(db, "settingsStamp", "0"),
+    engineVersion: String(Model.ENGINE_VERSION || 0),
     asOfDate: getMeta(db, "asOfDate", Model.todayIso())
   };
 }
@@ -952,6 +1131,14 @@ function bumpSettingsStamp(db) {
 
 function getSettings(db) {
   const maps = getAccountMaps(db);
+  let incomeStreamOverrides = {};
+  try {
+    incomeStreamOverrides = Model.normalizeIncomeOverrides(
+      JSON.parse(getMeta(db, "incomeStreamOverrides", "{}") || "{}")
+    );
+  } catch (_error) {
+    incomeStreamOverrides = {};
+  }
   return {
     asOfDate: getMeta(db, "asOfDate", Model.todayIso()),
     weeklySavingsTarget: Number(
@@ -961,6 +1148,10 @@ function getSettings(db) {
         Model.DEFAULT_CONFIG.weeklySavingsTarget
       )
     ),
+    checkingReserve: Number(
+      getMeta(db, "checkingReserve", Model.DEFAULT_CONFIG.checkingReserve)
+    ),
+    incomeStreamOverrides,
     accountTypes: maps.accountTypes,
     openingBalances: maps.openingBalances,
     accountLabels: maps.labels,
@@ -972,6 +1163,33 @@ function saveSettings(db, settings) {
   if (settings.asOfDate != null) setMeta(db, "asOfDate", settings.asOfDate);
   if (settings.weeklySavingsTarget != null) {
     setMeta(db, "weeklySavingsTarget", settings.weeklySavingsTarget);
+  }
+  if (settings.checkingReserve != null) {
+    setMeta(db, "checkingReserve", settings.checkingReserve);
+  }
+  if (settings.incomeStreamOverrides != null) {
+    const prev = getSettings(db).incomeStreamOverrides || {};
+    const incoming = settings.incomeStreamOverrides;
+    const merged = { ...prev };
+    Object.entries(incoming || {}).forEach(([key, value]) => {
+      const normalizedKey = String(key || "")
+        .trim()
+        .toLowerCase();
+      if (!normalizedKey) return;
+      if (value == null || value === "" || value.status === "clear") {
+        delete merged[normalizedKey];
+        return;
+      }
+      const status =
+        typeof value === "string" ? value : value && value.status;
+      if (!status) return;
+      merged[normalizedKey] = { status: String(status) };
+    });
+    setMeta(
+      db,
+      "incomeStreamOverrides",
+      JSON.stringify(Model.normalizeIncomeOverrides(merged))
+    );
   }
   bumpSettingsStamp(db);
   if (typeof db._persist === "function") db._persist();
@@ -993,6 +1211,293 @@ function purgeDemoTransactions(db) {
   return { deleted: result.changes || 0 };
 }
 
+function mapLearnedRuleRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    scope: row.scope,
+    matchKind: row.match_kind,
+    matchKey: row.match_key,
+    effect: row.effect,
+    effectValue: Learned.parseEffectValue(row.effect_value),
+    priority: row.priority,
+    source: row.source,
+    evidence: row.evidence_json ? JSON.parse(row.evidence_json) : null,
+    hitCount: row.hit_count,
+    active: Boolean(row.active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listLearnedRules(db, scope) {
+  const rows = scope
+    ? db
+        .prepare(
+          `SELECT * FROM learned_rules WHERE scope = ? ORDER BY priority ASC, updated_at DESC`
+        )
+        .all(scope)
+    : db
+        .prepare(`SELECT * FROM learned_rules ORDER BY scope, priority ASC, updated_at DESC`)
+        .all();
+  return rows.map(mapLearnedRuleRow);
+}
+
+function getLearnedRule(db, id) {
+  return mapLearnedRuleRow(
+    db.prepare("SELECT * FROM learned_rules WHERE id = ?").get(id)
+  );
+}
+
+function upsertLearnedRule(db, input) {
+  const rule = Learned.normalizeRuleInput(input);
+  const now = new Date().toISOString();
+  const existing = db.prepare("SELECT * FROM learned_rules WHERE id = ?").get(rule.id);
+  db.prepare(`
+    INSERT INTO learned_rules (
+      id, scope, match_kind, match_key, effect, effect_value, priority,
+      source, evidence_json, hit_count, active, created_at, updated_at
+    ) VALUES (
+      @id, @scope, @matchKind, @matchKey, @effect, @effectValue, @priority,
+      @source, @evidenceJson, @hitCount, @active, @createdAt, @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      effect_value = excluded.effect_value,
+      priority = excluded.priority,
+      source = excluded.source,
+      evidence_json = COALESCE(excluded.evidence_json, learned_rules.evidence_json),
+      hit_count = MAX(learned_rules.hit_count, excluded.hit_count),
+      active = excluded.active,
+      updated_at = excluded.updated_at
+  `).run({
+    id: rule.id,
+    scope: rule.scope,
+    matchKind: rule.matchKind,
+    matchKey: rule.matchKey,
+    effect: rule.effect,
+    effectValue: Learned.stringifyEffectValue(rule.effectValue),
+    priority: rule.priority,
+    source: rule.source,
+    evidenceJson: rule.evidence ? JSON.stringify(rule.evidence) : null,
+    hitCount: rule.hitCount || (existing ? existing.hit_count : 0),
+    active: rule.active ? 1 : 0,
+    createdAt: existing?.created_at || now,
+    updatedAt: now
+  });
+  if (typeof db._persist === "function") db._persist();
+  return getLearnedRule(db, rule.id);
+}
+
+function deactivateLearnedRule(db, id) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE learned_rules SET active = 0, updated_at = ? WHERE id = ?`
+  ).run(now, id);
+  if (typeof db._persist === "function") db._persist();
+  return getLearnedRule(db, id);
+}
+
+function bumpLearnedHitCounts(db, ruleIds) {
+  if (!ruleIds?.length) return;
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `UPDATE learned_rules SET hit_count = hit_count + 1, updated_at = ? WHERE id = ?`
+  );
+  ruleIds.forEach((id) => stmt.run(now, id));
+}
+
+function applyLearnedMoneyOverlay(db, normalized) {
+  if (!normalized) return normalized;
+  const direction = normalized.direction || "";
+  if (direction !== "in" && direction !== "out") return normalized;
+  const merchant = normalized.merchant || normalized.rawMerchant || "";
+  if (Learned.isPeerP2pMerchant(merchant)) return normalized;
+  const resolved = Learned.resolveMoney(
+    listLearnedRules(db, "money"),
+    merchant,
+    direction
+  );
+  if (!resolved) return normalized;
+  const next = { ...normalized };
+  if (resolved.direction && !next.direction) {
+    next.direction = resolved.direction;
+  }
+  if (resolved.category) {
+    const placeholder =
+      !next.category || next.category === "uncategorized" || next.category === "";
+    if (placeholder) next.category = resolved.category;
+  }
+  if (resolved.ruleIds?.length) bumpLearnedHitCounts(db, resolved.ruleIds);
+  next.needsReview =
+    !next.direction ||
+    (next.direction === "transfer" && !next.transferAccount) ||
+    (next.direction !== "transfer" && !next.category);
+  return next;
+}
+
+/**
+ * Apply a learned category to sibling rows with the same merchant key.
+ * Skips committed rows that already have a different non-placeholder category.
+ * Never propagates across Venmo/Zelle/PayPal/Cash App.
+ */
+function applyLearnedCategoryToSimilar(db, merchant, direction, category, options = {}) {
+  if (Learned.isPeerP2pMerchant(merchant)) return { updated: 0, ids: [] };
+  const key = Learned.merchantKey(merchant, direction);
+  if (!key || !category) return { updated: 0, ids: [] };
+  const excludeId = options.excludeId || null;
+  const now = new Date().toISOString();
+  const rows = db
+    .prepare(
+      `SELECT id, merchant, raw_merchant, direction, category, committed_at
+       FROM transactions
+       WHERE direction = ?`
+    )
+    .all(direction);
+  const stmt = db.prepare(`
+    UPDATE transactions
+    SET category = @category,
+        needs_review = @needsReview,
+        updated_at = @updatedAt
+    WHERE id = @id
+  `);
+  const ids = [];
+  withTransaction(db, () => {
+    rows.forEach((row) => {
+      if (excludeId && row.id === excludeId) return;
+      const rowKey = Learned.merchantKey(row.merchant || row.raw_merchant, direction);
+      if (rowKey !== key) return;
+      const current = row.category || "";
+      const placeholder = !current || current === "uncategorized";
+      if (!placeholder && current !== category && row.committed_at) return;
+      if (current === category) return;
+      const needsReview = !row.direction || !category;
+      stmt.run({
+        id: row.id,
+        category,
+        needsReview: needsReview ? 1 : 0,
+        updatedAt: now
+      });
+      ids.push(row.id);
+    });
+  });
+  if (ids.length && typeof db._persist === "function") db._persist();
+  return { updated: ids.length, ids };
+}
+
+function learnFromMoneyCommit(db, updates, options = {}) {
+  const applySimilar = options.applySimilar !== false;
+  let similarUpdated = 0;
+  const learned = [];
+  (updates || []).forEach((row) => {
+    const existing = db
+      .prepare(
+        `SELECT id, merchant, raw_merchant, direction, category FROM transactions WHERE id = ?`
+      )
+      .get(row.id);
+    const merged = {
+      id: row.id,
+      merchant: existing?.merchant || row.merchant || "",
+      rawMerchant: existing?.raw_merchant || row.rawMerchant || "",
+      direction: row.direction || existing?.direction || "",
+      category: row.category || ""
+    };
+    Learned.moneyLearnFromCommit(merged).forEach((ruleInput) => {
+      const saved = upsertLearnedRule(db, ruleInput);
+      learned.push(saved);
+      if (applySimilar && ruleInput.effect === "set_category") {
+        const result = applyLearnedCategoryToSimilar(
+          db,
+          merged.merchant || merged.rawMerchant,
+          merged.direction,
+          ruleInput.effectValue.category,
+          { excludeId: row.id }
+        );
+        similarUpdated += result.updated;
+      }
+    });
+  });
+  return { learned, similarUpdated };
+}
+
+function learnFromDigestAction(db, actionItem, targetItem) {
+  const type = actionItem?.type || "";
+  const learned = [];
+  if (type === "action.unsubscribe" || type === "signal.junk") {
+    Learned.digestLearnFromUnsubscribe(actionItem.data || {}).forEach((rule) => {
+      learned.push(upsertLearnedRule(db, rule));
+    });
+  }
+  if (
+    type === "action.rsvp.no" ||
+    type === "action.dismiss" ||
+    type === "action.rsvp.yes" ||
+    type === "action.going"
+  ) {
+    Learned.digestLearnFromTarget(targetItem, type).forEach((ruleInput) => {
+      // Threshold: group/calendar drop and from_domain stay inactive until enough
+      // distinct declines. Unsubscribe / Going / sender mute remain immediate.
+      if (Learned.digestRuleNeedsThreshold(ruleInput)) {
+        const existing = getLearnedRule(db, ruleInput.id);
+        const threshold = Number(ruleInput.evidence?.threshold) || 2;
+        const merged = Learned.mergeThresholdEvidence(
+          existing,
+          ruleInput,
+          threshold
+        );
+        learned.push(
+          upsertLearnedRule(db, {
+            ...ruleInput,
+            evidence: merged.evidence,
+            hitCount: merged.hitCount,
+            active: merged.active
+          })
+        );
+      } else {
+        learned.push(upsertLearnedRule(db, ruleInput));
+      }
+    });
+  }
+  return learned;
+}
+
+function resolveDigestLearned(db, message) {
+  return Learned.resolveDigest(listLearnedRules(db, "digest"), message);
+}
+
+function promoteBillFromSuggestion(db, suggestion) {
+  if (!suggestion || !suggestion.amount) {
+    throw new Error("Bill suggestion requires amount");
+  }
+  const seedId = suggestion.seedBillId || null;
+  const existing = seedId ? getBill(db, seedId) : null;
+  const id =
+    existing?.id ||
+    suggestion.id ||
+    `bill:${String(suggestion.title || suggestion.merchant || "recurring")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40)}`;
+  const notes = [
+    existing?.notes || "",
+    suggestion.streamKey ? `stream:${suggestion.streamKey}` : ""
+  ]
+    .filter(Boolean)
+    .join(" · ")
+    .slice(0, 200);
+  return upsertBill(db, {
+    id,
+    title: suggestion.title || existing?.title || suggestion.merchant || "Bill",
+    amount: Number(suggestion.amount),
+    dueDay: Number(suggestion.dueDay) || existing?.dueDay || 1,
+    leadDays: Number(suggestion.leadDays) || existing?.leadDays || 5,
+    category: suggestion.category || existing?.category || "",
+    active: true,
+    notes,
+    lastPaidFor: existing?.lastPaidFor || null
+  });
+}
+
 function computeLiveSnapshot(db, overrideSettings) {
   // Heal unlinked savings moves and card payoffs before totals.
   linkInternalTransfers(db);
@@ -1001,13 +1506,252 @@ function computeLiveSnapshot(db, overrideSettings) {
   if (!overrideSettings || overrideSettings.asOfDate == null) {
     settings.asOfDate = Model.todayIso();
   }
-  return Model.computeSnapshot(listTransactions(db), {
+  const maps = getAccountMaps(db);
+  const transactions = listTransactions(db);
+  const accounts = maps.accounts || listAccounts(db);
+  const snapshot = Model.computeSnapshot(transactions, {
     ...settings,
-    bills: listBills(db)
+    bills: listBills(db),
+    reportedBalances: maps.reportedBalances,
+    accounts,
+    accountLabels: maps.labels
   });
+  return enrichSnapshot(db, snapshot, transactions, accounts);
 }
 
-function commitTransactions(db, updates) {
+function enrichSnapshot(db, snapshot, transactions, accounts) {
+  const txs = transactions || listTransactions(db);
+  const accountList = accounts || listAccounts(db);
+  const months = Learned.buildMonthlyTallies(txs);
+  const recurringMarks = Learned.recurringMarksFromStreams(snapshot.recurring || []);
+  const existingBills = listBills(db);
+  const activeStreamNotes = new Set(
+    existingBills
+      .map((b) => String(b.notes || ""))
+      .flatMap((notes) => {
+        const m = notes.match(/stream:([^\s·]+)/);
+        return m ? [m[1]] : [];
+      })
+  );
+  const billSuggestions = (snapshot.recurring || [])
+    .map((stream) => Learned.billSuggestionFromStream(stream))
+    .filter(Boolean)
+    .filter((s) => !activeStreamNotes.has(s.streamKey))
+    .filter((s) => {
+      // Skip if an active bill already matches seed with a real amount.
+      if (!s.seedBillId) return true;
+      const bill = existingBills.find((b) => b.id === s.seedBillId);
+      if (bill && bill.active && Number(bill.amount) > 0) return false;
+      return true;
+    });
+  const cardSchedule = Model.buildCardSchedule(
+    txs,
+    accountList,
+    snapshot,
+    snapshot.asOfDate || getSettings(db).asOfDate
+  );
+  return {
+    ...snapshot,
+    months,
+    recurringMarks,
+    billSuggestions,
+    cardSchedule
+  };
+}
+
+/**
+ * Re-apply offline categoryFor() to expense rows that are still blank/uncategorized.
+ * Does not overwrite a real user-chosen category. Safe to run after rules updates.
+ */
+function recategorizeTransactions(db, options = {}) {
+  const force = Boolean(options.force);
+  const rows = db
+    .prepare(
+      `SELECT id, merchant, raw_merchant, direction, category, committed_at
+       FROM transactions`
+    )
+    .all();
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    UPDATE transactions
+    SET category = @category,
+        needs_review = @needsReview,
+        updated_at = @updatedAt
+    WHERE id = @id
+  `);
+  let updated = 0;
+  const byCategory = {};
+
+  withTransaction(db, () => {
+    rows.forEach((row) => {
+      if (row.direction !== "out" && row.direction !== "in") return;
+      const current = row.category || "";
+      const isPlaceholder =
+        !current || current === "uncategorized" || current === "";
+      if (!force && !isPlaceholder) return;
+      // Keep income rows as income when already labeled.
+      if (row.direction === "in" && current === "income" && !force) return;
+
+      const merchant = row.merchant || row.raw_merchant || "";
+      let next =
+        row.direction === "in"
+          ? Rules.categoryFor(merchant) === "income"
+            ? "income"
+            : current === "income"
+              ? "income"
+              : Rules.categoryFor(merchant)
+          : Rules.categoryFor(merchant);
+
+      const learned = Learned.resolveMoney(
+        listLearnedRules(db, "money"),
+        merchant,
+        row.direction
+      );
+      if (learned?.category) next = learned.category;
+      if (learned?.direction === "in" && row.direction === "in" && !next) {
+        next = "income";
+      }
+
+      if (row.direction === "in" && next === "uncategorized") next = "income";
+      if (next === current) return;
+      if (!force && !isPlaceholder) return;
+
+      const needsReview =
+        !row.direction ||
+        (row.direction !== "transfer" && !next);
+      stmt.run({
+        id: row.id,
+        category: next,
+        needsReview: needsReview ? 1 : 0,
+        updatedAt: now
+      });
+      updated += 1;
+      byCategory[next] = (byCategory[next] || 0) + 1;
+      if (learned?.ruleIds?.length) bumpLearnedHitCounts(db, learned.ruleIds);
+    });
+  });
+
+  setMeta(db, "categoryRulesVersion", String(Rules.CATEGORY_RULES_VERSION));
+  if (typeof db._persist === "function") db._persist();
+  return {
+    updated,
+    byCategory,
+    version: Rules.CATEGORY_RULES_VERSION,
+    snapshot: computeLiveSnapshot(db)
+  };
+}
+
+function healBlankDirections(db) {
+  const { accountTypes } = getAccountMaps(db);
+  const rows = db
+    .prepare(
+      `SELECT id, date, raw_merchant, amount, account, direction, category,
+              merchant, needs_review, transfer_account, suggested_transfer_account
+       FROM transactions
+       WHERE direction IS NULL OR direction = ''`
+    )
+    .all();
+  if (!rows.length) return { updated: 0 };
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    UPDATE transactions
+    SET direction = @direction,
+        category = @category,
+        merchant = @merchant,
+        needs_review = @needsReview,
+        transfer_account = @transferAccount,
+        suggested_transfer_account = @suggestedTransferAccount,
+        updated_at = @updatedAt
+    WHERE id = @id
+  `);
+  let updated = 0;
+  withTransaction(db, () => {
+    rows.forEach((row) => {
+      const normalized = Rules.normalizeTransaction(
+        {
+          id: row.id,
+          date: row.date,
+          rawMerchant: row.raw_merchant || row.merchant,
+          amount: row.amount,
+          account: row.account
+        },
+        accountTypes
+      );
+      if (!normalized.direction) return;
+      if ((row.direction || "") === normalized.direction) return;
+      stmt.run({
+        id: row.id,
+        direction: normalized.direction,
+        category: normalized.category || "",
+        merchant: normalized.merchant,
+        needsReview: normalized.needsReview ? 1 : 0,
+        transferAccount: normalized.transferAccount || "",
+        suggestedTransferAccount: normalized.suggestedTransferAccount || "",
+        updatedAt: now
+      });
+      updated += 1;
+    });
+  });
+  if (updated) {
+    bumpSettingsStamp(db);
+    linkInternalTransfers(db);
+    if (typeof db._persist === "function") db._persist();
+  }
+  return { updated };
+}
+
+function deactivatePeerP2pCategoryRules(db) {
+  const rules = listLearnedRules(db, "money");
+  let deactivated = 0;
+  rules.forEach((rule) => {
+    if (!rule.active) return;
+    if (rule.effect !== "set_category") return;
+    const hay = `${rule.matchKey || ""} ${rule.evidence?.merchant || ""}`;
+    if (!Learned.isPeerP2pMerchant(hay)) return;
+    deactivateLearnedRule(db, rule.id);
+    deactivated += 1;
+  });
+  if (deactivated && typeof db._persist === "function") db._persist();
+  return { deactivated };
+}
+
+function maybeRecategorizeOnBoot(db) {
+  const applied = getMeta(db, "categoryRulesVersion", "");
+  const engineApplied = getMeta(db, "engineVersion", "");
+  const directionApplied = getMeta(db, "directionRulesVersion", "");
+  const p2pApplied = getMeta(db, "p2pLearnExceptionVersion", "");
+  if (String(engineApplied) !== String(Model.ENGINE_VERSION)) {
+    bumpSettingsStamp(db);
+    setMeta(db, "engineVersion", String(Model.ENGINE_VERSION));
+  }
+  const DIRECTION_RULES_VERSION = "2";
+  let directionHeal = { updated: 0, skipped: true };
+  if (String(directionApplied) !== DIRECTION_RULES_VERSION) {
+    directionHeal = { skipped: false, ...healBlankDirections(db) };
+    setMeta(db, "directionRulesVersion", DIRECTION_RULES_VERSION);
+  }
+  let p2pHeal = { deactivated: 0, skipped: true };
+  if (String(p2pApplied) !== "1") {
+    p2pHeal = { skipped: false, ...deactivatePeerP2pCategoryRules(db) };
+    setMeta(db, "p2pLearnExceptionVersion", "1");
+  }
+  if (String(applied) === String(Rules.CATEGORY_RULES_VERSION)) {
+    return {
+      skipped: true,
+      version: Rules.CATEGORY_RULES_VERSION,
+      directionHeal,
+      p2pHeal
+    };
+  }
+  return {
+    skipped: false,
+    ...recategorizeTransactions(db),
+    directionHeal,
+    p2pHeal
+  };
+}
+
+function commitTransactions(db, updates, options = {}) {
   if (!Array.isArray(updates) || updates.length === 0) {
     throw new Error("Commit requires at least one explicit update");
   }
@@ -1049,10 +1793,17 @@ function commitTransactions(db, updates) {
       });
     });
   });
+
+  const learning = learnFromMoneyCommit(db, updates, {
+    applySimilar: options.applySimilar !== false
+  });
+
   if (typeof db._persist === "function") db._persist();
   return {
     committedAt: now,
     count: updates.length,
+    learned: learning.learned,
+    similarUpdated: learning.similarUpdated,
     transactions: listTransactions(db),
     snapshot: computeLiveSnapshot(db)
   };
@@ -1167,7 +1918,8 @@ function getConnectorWatermark(db, source) {
 function insertRawTransaction(db, raw) {
   const Duplicates = require("../engine/duplicates.js");
   const { accountTypes } = getAccountMaps(db);
-  const normalized = Rules.normalizeTransaction(raw, accountTypes);
+  let normalized = Rules.normalizeTransaction(raw, accountTypes);
+  normalized = applyLearnedMoneyOverlay(db, normalized);
   const now = new Date().toISOString();
   const fp =
     raw.fingerprint ||
@@ -1646,6 +2398,7 @@ function listAiProposals(db) {
 
 function redactSnapshot(snapshot) {
   return {
+    asOfDate: snapshot.asOfDate || null,
     netWorth: snapshot.netWorth,
     liquid: snapshot.liquid,
     invested: snapshot.invested,
@@ -1658,24 +2411,467 @@ function redactSnapshot(snapshot) {
     spendingMonth: snapshot.spendingMonth,
     spendingByCategory: snapshot.spendingByCategory,
     recurring: snapshot.recurring,
+    months: snapshot.months || [],
+    recurringMarks: snapshot.recurringMarks || {},
+    billSuggestions: snapshot.billSuggestions || [],
+    cardSchedule: snapshot.cardSchedule || [],
+    balanceSources: snapshot.balanceSources || {},
+    balanceWarnings: snapshot.balanceWarnings || [],
     balances: snapshot.balances,
     holdingBreakdown: snapshot.holdingBreakdown,
+    categoryDiagnostics: snapshot.categoryDiagnostics || {
+      categories: [],
+      leakFlag: null,
+      envelopeSuggestions: []
+    },
     safeToSpend: {
       period: snapshot.safeToSpend.period,
       periodSource: snapshot.safeToSpend.periodSource,
+      fundingMode: snapshot.safeToSpend.fundingMode || "cash-backed",
       nextPayday: snapshot.safeToSpend.nextPayday,
       horizonDays: snapshot.safeToSpend.horizonDays,
+      allocationWeeks: snapshot.safeToSpend.allocationWeeks,
+      horizonSource: snapshot.safeToSpend.horizonSource,
       amount: snapshot.safeToSpend.remaining,
       income: snapshot.safeToSpend.income,
       weeklyIncome: snapshot.safeToSpend.weeklyIncome,
+      incomeReceived: snapshot.safeToSpend.incomeReceived,
+      incomeExpected: snapshot.safeToSpend.incomeExpected,
       committed: snapshot.safeToSpend.committed,
       commitments: snapshot.safeToSpend.commitments,
+      dueThisWeek: snapshot.safeToSpend.dueThisWeek || [],
       savingsTarget: snapshot.safeToSpend.savingsTarget,
+      savingsNeeded: snapshot.safeToSpend.savingsNeeded,
+      savingsAlready: snapshot.safeToSpend.savingsAlready,
+      savingsRemaining: snapshot.safeToSpend.savingsRemaining,
       spent: snapshot.safeToSpend.spent,
-      remaining: snapshot.safeToSpend.remaining
+      remaining: snapshot.safeToSpend.remaining,
+      cashBackedRemaining: snapshot.safeToSpend.cashBackedRemaining,
+      breakdown: snapshot.safeToSpend.breakdown || null,
+      incomeOutlook: snapshot.safeToSpend.incomeOutlook || [],
+      assumptions: snapshot.safeToSpend.assumptions || [],
+      ratchet: snapshot.safeToSpend.ratchet || null
     },
-    flags: []
+    flags: snapshot.flags || []
   };
+}
+
+function mapCourse(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    term: row.term || null,
+    canvasCourseId: row.canvas_course_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listCourses(db) {
+  return db
+    .prepare("SELECT * FROM courses ORDER BY name COLLATE NOCASE")
+    .all()
+    .map(mapCourse);
+}
+
+function upsertCourse(db, course) {
+  const now = new Date().toISOString();
+  const id = String(course.id || "").trim();
+  if (!id) throw new Error("course.id is required");
+  const existing = db.prepare("SELECT * FROM courses WHERE id = ?").get(id);
+  db.prepare(
+    `INSERT INTO courses (id, name, term, canvas_course_id, created_at, updated_at)
+     VALUES (@id, @name, @term, @canvasCourseId, @createdAt, @updatedAt)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       term = COALESCE(excluded.term, courses.term),
+       canvas_course_id = COALESCE(excluded.canvas_course_id, courses.canvas_course_id),
+       updated_at = excluded.updated_at`
+  ).run({
+    id,
+    name: String(course.name || id).slice(0, 160),
+    term: course.term || null,
+    canvasCourseId: course.canvasCourseId || course.canvas_course_id || null,
+    createdAt: existing?.created_at || now,
+    updatedAt: now
+  });
+  return mapCourse(db.prepare("SELECT * FROM courses WHERE id = ?").get(id));
+}
+
+function mapSyllabusSource(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    sourceKind: row.source_kind,
+    path: row.path || null,
+    contentHash: row.content_hash || null,
+    parsedAt: row.parsed_at || null,
+    rawRef: row.raw_ref || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listSyllabusSources(db, courseId = null) {
+  if (courseId) {
+    return db
+      .prepare(
+        "SELECT * FROM syllabus_sources WHERE course_id = ? ORDER BY parsed_at DESC"
+      )
+      .all(courseId)
+      .map(mapSyllabusSource);
+  }
+  return db
+    .prepare("SELECT * FROM syllabus_sources ORDER BY parsed_at DESC")
+    .all()
+    .map(mapSyllabusSource);
+}
+
+function upsertSyllabusSource(db, source) {
+  const now = new Date().toISOString();
+  const id = String(source.id || "").trim();
+  if (!id) throw new Error("syllabus_source.id is required");
+  const existing = db.prepare("SELECT * FROM syllabus_sources WHERE id = ?").get(id);
+  db.prepare(
+    `INSERT INTO syllabus_sources
+      (id, course_id, source_kind, path, content_hash, parsed_at, raw_ref, created_at, updated_at)
+     VALUES (@id, @courseId, @sourceKind, @path, @contentHash, @parsedAt, @rawRef, @createdAt, @updatedAt)
+     ON CONFLICT(id) DO UPDATE SET
+       course_id = excluded.course_id,
+       source_kind = excluded.source_kind,
+       path = excluded.path,
+       content_hash = excluded.content_hash,
+       parsed_at = excluded.parsed_at,
+       raw_ref = excluded.raw_ref,
+       updated_at = excluded.updated_at`
+  ).run({
+    id,
+    courseId: source.courseId,
+    sourceKind: source.sourceKind || source.source_kind || "file",
+    path: source.path || null,
+    contentHash: source.contentHash || source.content_hash || null,
+    parsedAt: source.parsedAt || source.parsed_at || now,
+    rawRef: source.rawRef || source.raw_ref || null,
+    createdAt: existing?.created_at || now,
+    updatedAt: now
+  });
+  return mapSyllabusSource(
+    db.prepare("SELECT * FROM syllabus_sources WHERE id = ?").get(id)
+  );
+}
+
+function mapAssessment(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    kind: row.kind,
+    title: row.title,
+    date: row.date || null,
+    time: row.time || null,
+    weight: row.weight != null ? Number(row.weight) : null,
+    source: row.source,
+    confidence: row.confidence,
+    leadDays: Number(row.lead_days) || 7,
+    confirmed: Boolean(row.confirmed),
+    canvasDate: row.canvas_date || null,
+    parsedDate: row.parsed_date || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listAssessments(db, courseId = null) {
+  if (courseId) {
+    return db
+      .prepare(
+        "SELECT * FROM assessments WHERE course_id = ? ORDER BY date IS NULL, date"
+      )
+      .all(courseId)
+      .map(mapAssessment);
+  }
+  return db
+    .prepare("SELECT * FROM assessments ORDER BY date IS NULL, date")
+    .all()
+    .map(mapAssessment);
+}
+
+function upsertAssessment(db, assessment) {
+  const now = new Date().toISOString();
+  const id = String(assessment.id || "").trim();
+  if (!id) throw new Error("assessment.id is required");
+  const existing = db.prepare("SELECT * FROM assessments WHERE id = ?").get(id);
+  const confirmed =
+    assessment.confirmed != null
+      ? assessment.confirmed
+        ? 1
+        : 0
+      : existing
+        ? existing.confirmed
+        : assessment.confidence === "high"
+          ? 1
+          : 0;
+  db.prepare(
+    `INSERT INTO assessments
+      (id, course_id, kind, title, date, time, weight, source, confidence, lead_days,
+       confirmed, canvas_date, parsed_date, created_at, updated_at)
+     VALUES (@id, @courseId, @kind, @title, @date, @time, @weight, @source, @confidence, @leadDays,
+       @confirmed, @canvasDate, @parsedDate, @createdAt, @updatedAt)
+     ON CONFLICT(id) DO UPDATE SET
+       course_id = excluded.course_id,
+       kind = excluded.kind,
+       title = excluded.title,
+       date = excluded.date,
+       time = excluded.time,
+       weight = excluded.weight,
+       source = excluded.source,
+       confidence = excluded.confidence,
+       lead_days = excluded.lead_days,
+       confirmed = excluded.confirmed,
+       canvas_date = excluded.canvas_date,
+       parsed_date = excluded.parsed_date,
+       updated_at = excluded.updated_at`
+  ).run({
+    id,
+    courseId: assessment.courseId,
+    kind: assessment.kind || "assignment",
+    title: String(assessment.title || "Assessment").slice(0, 160),
+    date: assessment.date || null,
+    time: assessment.time || null,
+    weight: assessment.weight != null ? Number(assessment.weight) : null,
+    source: assessment.source || "syllabus",
+    confidence: assessment.confidence || "high",
+    leadDays: Number(assessment.leadDays != null ? assessment.leadDays : 7),
+    confirmed,
+    canvasDate: assessment.canvasDate || assessment.canvas_date || null,
+    parsedDate:
+      assessment.parsedDate ||
+      assessment.parsed_date ||
+      assessment.date ||
+      null,
+    createdAt: existing?.created_at || now,
+    updatedAt: now
+  });
+  return mapAssessment(db.prepare("SELECT * FROM assessments WHERE id = ?").get(id));
+}
+
+function confirmAssessmentDate(db, assessmentId, date = null) {
+  const row = db.prepare("SELECT * FROM assessments WHERE id = ?").get(assessmentId);
+  if (!row) return null;
+  const nextDate = date || row.date || row.parsed_date;
+  db.prepare(
+    `UPDATE assessments SET confirmed = 1, confidence = 'high', date = ?, updated_at = ? WHERE id = ?`
+  ).run(nextDate, new Date().toISOString(), assessmentId);
+  return mapAssessment(
+    db.prepare("SELECT * FROM assessments WHERE id = ?").get(assessmentId)
+  );
+}
+
+function mapTopic(row) {
+  if (!row) return null;
+  let readings = [];
+  try {
+    readings = JSON.parse(row.readings_json || "[]");
+  } catch (_error) {
+    readings = [];
+  }
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    assessmentId: row.assessment_id || null,
+    title: row.title,
+    week: row.week != null ? Number(row.week) : null,
+    lectureRef: row.lecture_ref || null,
+    readings: Array.isArray(readings) ? readings : [],
+    reviewed: Boolean(row.reviewed),
+    reviewedHow: row.reviewed_how || null,
+    reviewedAt: row.reviewed_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listTopics(db, courseId = null) {
+  if (courseId) {
+    return db
+      .prepare(
+        "SELECT * FROM topics WHERE course_id = ? ORDER BY week IS NULL, week, title"
+      )
+      .all(courseId)
+      .map(mapTopic);
+  }
+  return db
+    .prepare("SELECT * FROM topics ORDER BY week IS NULL, week, title")
+    .all()
+    .map(mapTopic);
+}
+
+function upsertTopic(db, topic) {
+  const now = new Date().toISOString();
+  const id = String(topic.id || "").trim();
+  if (!id) throw new Error("topic.id is required");
+  const existing = db.prepare("SELECT * FROM topics WHERE id = ?").get(id);
+  const reviewed =
+    topic.reviewed != null ? (topic.reviewed ? 1 : 0) : existing ? existing.reviewed : 0;
+  db.prepare(
+    `INSERT INTO topics
+      (id, course_id, assessment_id, title, week, lecture_ref, readings_json,
+       reviewed, reviewed_how, reviewed_at, created_at, updated_at)
+     VALUES (@id, @courseId, @assessmentId, @title, @week, @lectureRef, @readingsJson,
+       @reviewed, @reviewedHow, @reviewedAt, @createdAt, @updatedAt)
+     ON CONFLICT(id) DO UPDATE SET
+       course_id = excluded.course_id,
+       assessment_id = excluded.assessment_id,
+       title = excluded.title,
+       week = excluded.week,
+       lecture_ref = excluded.lecture_ref,
+       readings_json = excluded.readings_json,
+       reviewed = excluded.reviewed,
+       reviewed_how = excluded.reviewed_how,
+       reviewed_at = excluded.reviewed_at,
+       updated_at = excluded.updated_at`
+  ).run({
+    id,
+    courseId: topic.courseId,
+    assessmentId: topic.assessmentId || topic.assessment_id || null,
+    title: String(topic.title || "Topic").slice(0, 160),
+    week: topic.week != null ? Number(topic.week) : null,
+    lectureRef: topic.lectureRef || topic.lecture_ref || null,
+    readingsJson: JSON.stringify(topic.readings || []),
+    reviewed,
+    reviewedHow:
+      topic.reviewedHow || topic.reviewed_how || existing?.reviewed_how || null,
+    reviewedAt: topic.reviewedAt || topic.reviewed_at || existing?.reviewed_at || null,
+    createdAt: existing?.created_at || now,
+    updatedAt: now
+  });
+  return mapTopic(db.prepare("SELECT * FROM topics WHERE id = ?").get(id));
+}
+
+function markTopicReviewed(db, topicId, how = "manual") {
+  const now = new Date().toISOString();
+  const row = db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId);
+  if (!row) return null;
+  db.prepare(
+    `UPDATE topics SET reviewed = 1, reviewed_how = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`
+  ).run(how, now, now, topicId);
+  return mapTopic(db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId));
+}
+
+function clearTopicReviewed(db, topicId) {
+  const row = db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId);
+  if (!row) return null;
+  db.prepare(
+    `UPDATE topics SET reviewed = 0, reviewed_how = NULL, reviewed_at = NULL, updated_at = ? WHERE id = ?`
+  ).run(new Date().toISOString(), topicId);
+  return mapTopic(db.prepare("SELECT * FROM topics WHERE id = ?").get(topicId));
+}
+
+function applySyllabusParse(db, parsed, sourceMeta = {}) {
+  // Calendar-first: syllabus is enrichment (topics + confirm-me), never deletes live schedule.
+  const scheduleMap = require("../engine/schedule-map.js");
+  return scheduleMap.applySyllabusEnrichment(module.exports, db, parsed, sourceMeta);
+}
+
+function listSyllabusMapChanges(db) {
+  try {
+    const raw = JSON.parse(getMeta(db, "syllabusMapChanges", "[]"));
+    return Array.isArray(raw) ? raw : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+/** Record that a course assessment map was re-parsed / re-reconciled. */
+function recordSyllabusMapChange(db, entry = {}) {
+  const courseId = String(entry.courseId || "").trim();
+  if (!courseId) return listSyllabusMapChanges(db);
+  const next = [
+    {
+      courseId,
+      at: entry.at || new Date().toISOString(),
+      sourceId: entry.sourceId || null,
+      sourceKind: entry.sourceKind || null,
+      note: entry.note || "syllabus map re-parsed"
+    },
+    ...listSyllabusMapChanges(db)
+  ].slice(0, 50);
+  setMeta(db, "syllabusMapChanges", JSON.stringify(next));
+  return next;
+}
+
+/**
+ * Coverage: a missing exam must never read as all-clear.
+ * - No confirmed assessments → "no syllabus loaded" (blocks clearDay), except
+ *   bare Google Calendar lecture shells (course:gcal:*) with no Canvas/syllabus.
+ * - Confirmed assessments but no topics → soft gap (schedule live; readiness empty).
+ */
+function coverageGaps(db) {
+  const gaps = [];
+  listCourses(db).forEach((course) => {
+    const allAssessments = listAssessments(db, course.id);
+    const confirmed = allAssessments.filter((a) => a.confirmed);
+    const topics = listTopics(db, course.id);
+    const sources = listSyllabusSources(db, course.id);
+    const isGcalShell = String(course.id).startsWith("course:gcal:");
+    const hasCanvasOrSyllabus =
+      Boolean(course.canvasCourseId) || sources.length > 0;
+
+    if (confirmed.length === 0) {
+      // Pending confirm-me dates are not a coverage gap — confirmDates owns those.
+      if (allAssessments.length > 0) return;
+      if (isGcalShell && !hasCanvasOrSyllabus) return;
+      gaps.push({
+        courseId: course.id,
+        note: `no syllabus loaded for ${course.name}`,
+        blocksClear: true
+      });
+      return;
+    }
+
+    if (topics.length === 0) {
+      gaps.push({
+        courseId: course.id,
+        note: `no study topics loaded for ${course.name} (calendar/Canvas schedule is live; optional syllabus/topics would enrich readiness)`,
+        blocksClear: false
+      });
+    } else if (sources.length === 0 && hasCanvasOrSyllabus) {
+      gaps.push({
+        courseId: course.id,
+        note: `no syllabus loaded for ${course.name}`,
+        blocksClear: false
+      });
+    }
+  });
+  return gaps;
+}
+
+function listNeedsALook(db) {
+  const confirmDates = listAssessments(db)
+    .filter((a) => !a.confirmed)
+    .map((a) => ({
+      assessmentId: a.id,
+      proposedDate: a.date || a.parsedDate,
+      source: a.source,
+      title: a.title
+    }));
+  let conflicts = [];
+  try {
+    conflicts = JSON.parse(getMeta(db, "syllabusConflicts", "[]"));
+  } catch (_error) {
+    conflicts = [];
+  }
+  return {
+    conflicts: Array.isArray(conflicts) ? conflicts : [],
+    confirmDates,
+    coverageGaps: coverageGaps(db)
+  };
+}
+
+function setSyllabusConflicts(db, conflicts) {
+  setMeta(db, "syllabusConflicts", JSON.stringify(conflicts || []));
 }
 
 module.exports = {
@@ -1696,10 +2892,24 @@ module.exports = {
   saveSettings,
   purgeDemoTransactions,
   computeLiveSnapshot,
+  recategorizeTransactions,
+  maybeRecategorizeOnBoot,
+  healBlankDirections,
+  deactivatePeerP2pCategoryRules,
   commitTransactions,
   upsertSyncItem,
   listSyncItems,
   markActionExecuted,
+  listLearnedRules,
+  getLearnedRule,
+  upsertLearnedRule,
+  deactivateLearnedRule,
+  applyLearnedMoneyOverlay,
+  applyLearnedCategoryToSimilar,
+  learnFromMoneyCommit,
+  learnFromDigestAction,
+  resolveDigestLearned,
+  promoteBillFromSuggestion,
   listBills,
   getBill,
   upsertBill,
@@ -1730,5 +2940,22 @@ module.exports = {
   listAiProposals,
   redactSnapshot,
   getMeta,
-  setMeta
+  setMeta,
+  listCourses,
+  upsertCourse,
+  listSyllabusSources,
+  upsertSyllabusSource,
+  listAssessments,
+  upsertAssessment,
+  confirmAssessmentDate,
+  listTopics,
+  upsertTopic,
+  markTopicReviewed,
+  clearTopicReviewed,
+  applySyllabusParse,
+  coverageGaps,
+  listSyllabusMapChanges,
+  recordSyllabusMapChange,
+  listNeedsALook,
+  setSyllabusConflicts
 };

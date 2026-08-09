@@ -7,6 +7,7 @@
 
 const secretStore = require("../secret-store.js");
 const dbApi = require("../db.js");
+const scheduleMap = require("../../engine/schedule-map.js");
 
 function normalizeBaseUrl(raw) {
   let value = String(raw || "").trim();
@@ -84,6 +85,11 @@ function courseLabel(item) {
   if (match) return `Course ${match[1]}`;
   if (item?.assignment?.course_id) return `Course ${item.assignment.course_id}`;
   return "Canvas";
+}
+
+/** Calendar-first: match Canvas onto GCal when possible; else seed Canvas live date. */
+function seedAssessmentFromSignal(db, signal) {
+  return scheduleMap.seedFromCanvasSignal(dbApi, db, signal);
 }
 
 function todoToSignal(item) {
@@ -211,6 +217,7 @@ async function syncToDb(db, options = {}) {
   signals.forEach((item) => {
     const row = { ...item, collectedAt };
     dbApi.upsertSyncItem(db, row);
+    seedAssessmentFromSignal(db, row);
     emitted.push(row);
   });
   dbApi.setConnectorWatermark(db, "canvas", collectedAt);

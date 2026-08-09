@@ -10,6 +10,8 @@ const SERVICE = "Shelf Finance Hub";
 const CONNECTOR_ACCOUNTS = Object.freeze({
   "groupme.token": "connector:groupme.token",
   "groupme.groupId": "connector:groupme.groupId",
+  "groupme.groupIds": "connector:groupme.groupIds",
+  "groupme.groupMeta": "connector:groupme.groupMeta",
   "email.clientId": "connector:email.clientId",
   "email.clientSecret": "connector:email.clientSecret",
   // Legacy single-inbox keys (migrated into email.1.* on use).
@@ -23,6 +25,10 @@ const CONNECTOR_ACCOUNTS = Object.freeze({
   "email.3.address": "connector:email.3.address",
   "canvas.token": "connector:canvas.token",
   "canvas.baseUrl": "connector:canvas.baseUrl",
+  "outlook.clientId": "connector:outlook.clientId",
+  "outlook.clientSecret": "connector:outlook.clientSecret",
+  "outlook.refreshToken": "connector:outlook.refreshToken",
+  "outlook.accessToken": "connector:outlook.accessToken",
   "bank.token": "connector:bank.token",
   "bank.endpoint": "connector:bank.endpoint",
   "simplefin.accessUrl": "connector:simplefin.accessUrl",

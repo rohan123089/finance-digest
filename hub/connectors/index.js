@@ -15,6 +15,15 @@ const simplefin = require("./simplefin.js");
 const rewardsWeb = require("./rewards-web.js");
 const canvas = require("./canvas.js");
 const groupme = require("./groupme.js");
+const gcal = require("./gcal.js");
+const syllabusFiles = require("./syllabus-files.js");
+const outlook = require("./outlook.js");
+const syllabus = require("../../engine/syllabus.js");
+
+function lifeOptions(db, message, extra = {}) {
+  const learnedHints = dbApi.resolveDigestLearned(db, message);
+  return { ...extra, learnedHints };
+}
 
 async function runGroupMe(db, options = {}) {
   return groupme.syncToDb(db, {
@@ -69,7 +78,7 @@ async function runSms(db, options = {}) {
   const collectedAt = new Date().toISOString();
   messages.forEach((message) => {
     if (watermark && String(message.id) <= String(watermark)) return;
-    const signals = life.extractFromChat({
+    const chatMsg = {
       id: String(message.id),
       text: message.text || "",
       from: message.from || "sms",
@@ -77,7 +86,8 @@ async function runSms(db, options = {}) {
       source: "sms",
       sourceRef: `sms:${message.id}`,
       url: message.url
-    });
+    };
+    const signals = life.extractFromChat(chatMsg, lifeOptions(db, chatMsg));
     signals.forEach((item) => {
       const row = { ...item, collectedAt };
       dbApi.upsertSyncItem(db, row);
@@ -141,8 +151,9 @@ async function runEmail(db, options = {}) {
     messages = mockLifeMessages();
   } else {
     const data = await Net.call("email", {
-      maxResults: 15,
-      slot: options.slot
+      maxResults: options.maxResults || 25,
+      slot: options.slot,
+      query: options.query
     });
     messages = Array.isArray(data.messages) ? data.messages : [];
     accounts = Array.isArray(data.accounts) ? data.accounts : [];
@@ -165,39 +176,94 @@ async function runEmail(db, options = {}) {
 
   const emitted = [];
   const collectedAt = new Date().toISOString();
+  const newestBySlot = new Map();
+
+  function isTimeWatermark(value) {
+    return /^\d{4}-\d{2}-\d{2}T/.test(String(value || ""));
+  }
+
   messages.forEach((message) => {
     const slot = Number(message.accountSlot) || 1;
     const wmKey = `email:${slot}`;
     const watermark =
       dbApi.getConnectorWatermark(db, wmKey) ||
       (slot === 1 ? dbApi.getConnectorWatermark(db, "email") || "" : "");
-    if (watermark && String(message.id) <= String(watermark)) return;
-    const signals = life.extractFromMessage(
-      { ...message, source: "email", sourceRef: `email:${message.id}` },
-      {}
-    );
-    if (!signals.length && message.url) {
-      signals.push({
-        id: `email:${message.id}`,
-        type: "signal.link",
-        source: "email",
-        at: message.receivedAt || collectedAt,
-        data: {
-          url: message.url,
-          sharedBy: message.sharedBy || "email",
-          context: null,
-          domain: "personal",
-          mailbox: message.mailbox || null
-        }
-      });
+    const receivedAt = message.receivedAt || collectedAt;
+    // Prefer ISO receivedAt watermarks. Legacy lexical gmail-id watermarks were
+    // not chronological and could silence an inbox after the first successful pull.
+    if (isTimeWatermark(watermark) && receivedAt <= watermark) return;
+
+    const text = `${message.subject || ""}\n${message.snippet || ""}`;
+    const urls = text.match(/https?:\/\/[^\s<>"')]+/gi) || [];
+    const firstUrl = message.url || (urls[0] ? urls[0].replace(/[.,;:]+$/, "") : null);
+
+    const mailMsg = {
+      ...message,
+      source: "email",
+      sourceRef: `email:${message.id}`,
+      url: firstUrl || message.url
+    };
+    const signals = life.extractFromMessage(mailMsg, lifeOptions(db, mailMsg));
+    if (!signals.length && firstUrl) {
+      const hints = lifeOptions(db, mailMsg).learnedHints || {};
+      if (!hints.mute && !hints.junkReading) {
+        signals.push({
+          id: `email:${message.id}`,
+          type: "signal.link",
+          source: "email",
+          at: receivedAt,
+          data: {
+            url: firstUrl,
+            title: message.subject || firstUrl,
+            sharedBy: message.sharedBy || message.mailbox || "email",
+            context: null,
+            domain: hints.domain || life.inferDomain(text, message.from || ""),
+            mailbox: message.mailbox || null
+          }
+        });
+      }
     }
     signals.forEach((item) => {
       const row = { ...item, collectedAt };
       dbApi.upsertSyncItem(db, row);
       emitted.push(row);
     });
-    dbApi.setConnectorWatermark(db, wmKey, String(message.id));
-    if (slot === 1) dbApi.setConnectorWatermark(db, "email", String(message.id));
+
+    const bodyText = message.body || message.snippet || "";
+    if (syllabus.looksLikeSyllabusEmail(message.subject, bodyText)) {
+      const attachmentText = Array.isArray(message.attachmentTexts)
+        ? message.attachmentTexts.join("\n")
+        : "";
+      const syllabusText = [message.subject, bodyText, attachmentText]
+        .filter(Boolean)
+        .join("\n");
+      try {
+        syllabusFiles.ingestSyllabusText(db, syllabusText, {
+          courseName: String(message.subject || "Course").slice(0, 80),
+          sourceId: `syllabus:gmail:${message.id}`,
+          source: "email",
+          rawRef: `email:${message.id}`
+        });
+      } catch (_error) {
+        // Syllabus parse failures must not block life signals.
+      }
+    }
+
+    const prevNewest = newestBySlot.get(slot) || "";
+    if (!prevNewest || receivedAt > prevNewest) {
+      newestBySlot.set(slot, receivedAt);
+    }
+  });
+
+  newestBySlot.forEach((at, slot) => {
+    const wmKey = `email:${slot}`;
+    const existing =
+      dbApi.getConnectorWatermark(db, wmKey) ||
+      (slot === 1 ? dbApi.getConnectorWatermark(db, "email") || "" : "");
+    if (!isTimeWatermark(existing) || at > existing) {
+      dbApi.setConnectorWatermark(db, wmKey, at);
+      if (slot === 1) dbApi.setConnectorWatermark(db, "email", at);
+    }
   });
 
   return { source: "email", mode, emitted, accounts };
@@ -306,6 +372,57 @@ async function runCanvas(db, options = {}) {
   }
 }
 
+async function runGcal(db, options = {}) {
+  const forceMock = options.forceMock === true;
+  try {
+    return await gcal.syncToDb(db, {
+      forceMock,
+      fetchImpl: options.fetchImpl
+    });
+  } catch (error) {
+    if (forceMock) throw error;
+    return {
+      source: "gcal",
+      mode: "skipped",
+      error: error.message || String(error),
+      emitted: [],
+      byAccount: {}
+    };
+  }
+}
+
+async function runSyllabusFiles(db, options = {}) {
+  try {
+    return await syllabusFiles.syncToDb(db, options);
+  } catch (error) {
+    if (options.forceMock === true) throw error;
+    return {
+      source: "syllabus-files",
+      mode: "skipped",
+      error: error.message || String(error),
+      emitted: []
+    };
+  }
+}
+
+async function runOutlook(db, options = {}) {
+  const forceMock = options.forceMock === true;
+  try {
+    return await outlook.syncToDb(db, {
+      forceMock,
+      fetchImpl: options.fetchImpl
+    });
+  } catch (error) {
+    if (forceMock) throw error;
+    return {
+      source: "outlook",
+      mode: "skipped",
+      error: error.message || String(error),
+      emitted: []
+    };
+  }
+}
+
 async function runAll(db, options = {}) {
   const forceMock = options.forceMock === true;
 
@@ -323,21 +440,31 @@ async function runAll(db, options = {}) {
     }
   }
 
-  const groupme = await soft("groupme", () => runGroupMe(db, { forceMock }));
+  const groupmeResult = await soft("groupme", () => runGroupMe(db, { forceMock }));
   const sms = await soft("sms", () => runSms(db, { forceMock }));
   const email = await soft("email", () => runEmail(db, { forceMock }));
   const bank = await soft("bank", () => runBank(db, { forceMock }));
+  const gcalResult = await runGcal(db, { ...options, forceMock });
   const canvasResult = await runCanvas(db, { ...options, forceMock });
   const simplefinResult = await runSimpleFin(db, { ...options, forceMock });
   const rewards = await runRewards(db, { ...options, forceMock });
+  const syllabusResult = await soft("syllabus-files", () =>
+    runSyllabusFiles(db, options)
+  );
+  const outlookResult = await soft("outlook", () =>
+    runOutlook(db, { ...options, forceMock })
+  );
   return {
-    groupme,
+    groupme: groupmeResult,
     sms,
     email,
     bank,
     canvas: canvasResult,
+    gcal: gcalResult,
     simplefin: simplefinResult,
-    rewards
+    rewards,
+    syllabusFiles: syllabusResult,
+    outlook: outlookResult
   };
 }
 
@@ -347,7 +474,10 @@ module.exports = {
   runEmail,
   runBank,
   runCanvas,
+  runGcal,
   runSimpleFin,
   runRewards,
+  runSyllabusFiles,
+  runOutlook,
   runAll
 };

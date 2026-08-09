@@ -2,13 +2,19 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const cryptoUtil = require("./crypto.js");
 const dbApi = require("./db.js");
 const life = require("../engine/life.js");
 const billsEngine = require("../engine/bills.js");
+const syllabus = require("../engine/syllabus.js");
 
 const CURRENT_VERSION = 1;
 const PRIOR_VERSION = 0;
+
+const HEAVY_EXAM_DAYS = 3;
+const HEAVY_OVERDUE = 3;
+const HEAVY_OPEN = 12;
 
 function ensureSyncLayout(syncRoot) {
   ["up", "down", "meta", path.join("up", "attachments")].forEach((part) => {
@@ -19,6 +25,144 @@ function ensureSyncLayout(syncRoot) {
 function acceptVersion(v) {
   if (v === CURRENT_VERSION || v === PRIOR_VERSION) return true;
   return false;
+}
+
+/** Merge outbox targetRef learning keys onto the stored sync item. */
+function enrichTargetForLearning(target, actionItem) {
+  const ref = actionItem?.data?.targetRef || {};
+  if (!target) {
+    if (!ref.itemId) return null;
+    return {
+      id: ref.itemId,
+      type: "signal.event",
+      data: { ...ref }
+    };
+  }
+  return {
+    ...target,
+    data: {
+      ...(target.data || {}),
+      from: target.data?.from || ref.from || null,
+      groupId: target.data?.groupId || ref.groupId || null,
+      calendarId: target.data?.calendarId || ref.calendarId || null,
+      url: target.data?.url || ref.url || null,
+      host: target.data?.host || ref.host || null,
+      sourceRef: target.data?.sourceRef || ref.sourceRef || null,
+      domain: target.data?.domain || ref.domain || null,
+      listIds: target.data?.listIds || ref.listIds || null
+    }
+  };
+}
+
+function escapeIcsText(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+function toIcsUtc(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * Build a downloadable .ics for a life event/task. Opens in any calendar app.
+ */
+function buildIcsForSyncItem(item) {
+  if (!item || !item.data) return null;
+  const title = item.data.title || item.data.name || "Life item";
+  const startIso =
+    item.data.start || item.data.dueAt || item.data.deadline || null;
+  const startUtc = startIso ? toIcsUtc(startIso) : null;
+  if (!startUtc) return null;
+
+  const startMs = Date.parse(startIso);
+  const endUtc = toIcsUtc(
+    item.data.end || new Date(startMs + 60 * 60 * 1000).toISOString()
+  );
+  const uid = `${item.id}@finance-digest.local`;
+  const domain = item.data.domain ? ` [${item.data.domain}]` : "";
+  const description = [
+    item.data.why || "",
+    item.data.sourceRef ? `Source: ${item.data.sourceRef}` : "",
+    item.source ? `Via: ${item.source}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const stamp = toIcsUtc(new Date().toISOString());
+
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Shelf Finance Digest//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${startUtc}`,
+    `DTEND:${endUtc}`,
+    `SUMMARY:${escapeIcsText(`${title}${domain}`)}`,
+    description ? `DESCRIPTION:${escapeIcsText(description)}` : null,
+    "END:VEVENT",
+    "END:VCALENDAR",
+    ""
+  ]
+    .filter((line) => line != null)
+    .join("\r\n");
+}
+
+function icsForItemId(db, itemId) {
+  const item = dbApi.listSyncItems(db).find((row) => row.id === itemId);
+  if (!item) return null;
+  if (
+    item.type !== "signal.event" &&
+    item.type !== "signal.task" &&
+    item.type !== "signal.deadline"
+  ) {
+    return null;
+  }
+  return buildIcsForSyncItem(item);
+}
+
+/**
+ * Expand raw SMS/chat outbox items into life signals (same rules as email).
+ * Used by encrypted file ingest and LAN POST /api/outbox.
+ */
+function expandIncomingLifeItem(db, item) {
+  if (!item?.id || !item?.type) return [];
+  if (
+    item.type !== "signal.sms" &&
+    item.type !== "signal.chat"
+  ) {
+    return [];
+  }
+  const text = item.data?.text || item.data?.body;
+  if (!text) return [];
+
+  const chatMsg = {
+    id: String(item.id).replace(/^(sms|chat):/, ""),
+    text,
+    from: item.data.from || item.data.sharedBy || item.source,
+    receivedAt: item.at || item.collectedAt,
+    source: item.source || (item.type === "signal.chat" ? "chat" : "sms"),
+    sourceRef: item.data.sourceRef || item.id,
+    url: item.data.url,
+    groupId: item.data.groupId
+  };
+  const learnedHints = dbApi.resolveDigestLearned(db, chatMsg);
+  const signals = life.extractFromChat(chatMsg, { learnedHints });
+  const collectedAt = item.collectedAt || new Date().toISOString();
+  signals.forEach((signal) => {
+    dbApi.upsertSyncItem(db, {
+      ...signal,
+      collectedAt
+    });
+  });
+  return signals;
 }
 
 function executePendingActions(db) {
@@ -41,9 +185,27 @@ function executePendingActions(db) {
       dbApi.markActionExecuted(db, item.id, "executed", "Bill upserted");
       return;
     }
+    if (item.type === "action.bills.fromSuggestion" && item.data) {
+      const bill = dbApi.promoteBillFromSuggestion(db, item.data);
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        `Bill promoted ${bill.id}`
+      );
+      return;
+    }
     if (item.type === "action.bills.delete" && item.data?.id) {
       dbApi.deleteBill(db, item.data.id);
       dbApi.markActionExecuted(db, item.id, "executed", "Bill deleted");
+      return;
+    }
+    if (
+      item.type === "action.unsubscribe" ||
+      item.type === "signal.junk"
+    ) {
+      dbApi.learnFromDigestAction(db, item, null);
+      dbApi.markActionExecuted(db, item.id, "executed", "Muted / unsubscribed (learned)");
       return;
     }
     if (
@@ -81,7 +243,11 @@ function executePendingActions(db) {
         dbApi.markActionExecuted(db, item.id, "executed", `Dismissed bill ${billId}`);
         return;
       }
-      const target = dbApi.listSyncItems(db).find((row) => row.id === targetId);
+      const target = enrichTargetForLearning(
+        dbApi.listSyncItems(db).find((row) => row.id === targetId),
+        item
+      );
+      dbApi.learnFromDigestAction(db, item, target);
       const status = target?.type === "signal.event" ? "declined" : "done";
       dbApi.markActionExecuted(
         db,
@@ -97,6 +263,15 @@ function executePendingActions(db) {
       (item.type === "action.rsvp.no" ||
         (item.type === "action.rsvp" && item.data?.response === "no"))
     ) {
+      const target = enrichTargetForLearning(
+        dbApi.listSyncItems(db).find((row) => row.id === targetId),
+        item
+      );
+      dbApi.learnFromDigestAction(
+        db,
+        { ...item, type: "action.rsvp.no" },
+        target
+      );
       dbApi.markActionExecuted(db, targetId, "declined", "Not going — kept for awareness");
       dbApi.markActionExecuted(db, item.id, "executed", `Declined ${targetId}`);
       return;
@@ -107,6 +282,15 @@ function executePendingActions(db) {
         item.type === "action.going" ||
         (item.type === "action.rsvp" && item.data?.response === "yes"))
     ) {
+      const target = enrichTargetForLearning(
+        dbApi.listSyncItems(db).find((row) => row.id === targetId),
+        item
+      );
+      dbApi.learnFromDigestAction(
+        db,
+        { ...item, type: "action.rsvp.yes" },
+        target
+      );
       dbApi.markActionExecuted(db, targetId, "going", "Marked going");
       dbApi.markActionExecuted(db, item.id, "executed", `Going ${targetId}`);
       return;
@@ -115,10 +299,64 @@ function executePendingActions(db) {
       targetId &&
       (item.type === "action.ack" ||
         item.type === "action.task.complete" ||
-        item.type === "action.complete")
+        item.type === "action.complete" ||
+        item.type === "action.markDone")
     ) {
-      dbApi.markActionExecuted(db, targetId, "done", "Completed / dismissed from Today");
-      dbApi.markActionExecuted(db, item.id, "executed", `Completed ${targetId}`);
+      const doneId = targetId || item.data?.taskId;
+      if (doneId) {
+        dbApi.markActionExecuted(db, doneId, "done", "Completed / dismissed from Today");
+      }
+      dbApi.markActionExecuted(db, item.id, "executed", `Completed ${doneId || "unknown"}`);
+      return;
+    }
+
+    if (item.type === "action.markDone" && item.data?.taskId && !targetId) {
+      dbApi.markActionExecuted(db, item.data.taskId, "done", "Completed via markDone");
+      dbApi.markActionExecuted(db, item.id, "executed", `Completed ${item.data.taskId}`);
+      return;
+    }
+
+    if (item.type === "action.markReviewed") {
+      const topicId = item.data?.topicId || item.data?.targetRef?.topicId;
+      if (topicId) {
+        dbApi.markTopicReviewed(db, topicId, "manual");
+      }
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        topicId ? `Reviewed topic ${topicId}` : "markReviewed missing topicId"
+      );
+      return;
+    }
+
+    if (item.type === "action.confirmDate") {
+      const assessmentId =
+        item.data?.assessmentId || item.data?.targetRef?.assessmentId;
+      const date = item.data?.date || item.data?.targetRef?.date || null;
+      if (assessmentId) {
+        dbApi.confirmAssessmentDate(db, assessmentId, date);
+      }
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        assessmentId ? `Confirmed date ${assessmentId}` : "confirmDate missing id"
+      );
+      return;
+    }
+
+    if (item.type === "action.calendar.add") {
+      const calTarget = item.data?.targetRef?.itemId;
+      const ics = calTarget ? icsForItemId(db, calTarget) : null;
+      dbApi.markActionExecuted(
+        db,
+        item.id,
+        "executed",
+        ics
+          ? `Calendar ICS ready for ${calTarget}`
+          : `Calendar add queued for ${calTarget || "unknown"} (no date)`
+      );
       return;
     }
 
@@ -149,6 +387,51 @@ function readingScore(item) {
   else if (source === "email") score += 10;
   if (sharedBy && sharedBy !== "newsletter") score += 5;
   return score;
+}
+
+/** Drop legacy GroupMe join/leave/pin rows and old "every message → event" fallbacks. */
+function isNoiseDigestEvent(item) {
+  const source = String(item.source || "").toLowerCase();
+  const title = String(item.data?.title || item.data?.name || "");
+  if (life.isChatNoiseText(title)) return true;
+  if (life.isConfirmationText(title)) return true;
+  if (source !== "groupme" && source !== "sms" && source !== "chat" && source !== "email") {
+    return false;
+  }
+  // Re-run extraction on the stored title. Legacy GroupMe fallback events and
+  // confirmation/newsletter leftovers that no longer match stay out of Today.
+  const again =
+    source === "email"
+      ? life.extractFromMessage({
+          id: "probe",
+          subject: title,
+          snippet: "",
+          from: "",
+          source: "email"
+        })
+      : life.extractFromChat({
+          id: "probe",
+          text: title,
+          from: source,
+          source
+        });
+  // Stored as event → only keep if title still looks like an event (not merely a task).
+  return !again.some((row) => row.type === "signal.event");
+}
+
+function isNoiseDigestTask(item) {
+  const title = String(item.data?.title || "");
+  if (life.isChatNoiseText(title)) return true;
+  if (!life.isConfirmationText(title)) return false;
+  // Keep confirmations that also carry real deadline/action language.
+  const again = life.extractFromMessage({
+    id: "probe",
+    subject: title,
+    snippet: "",
+    from: "",
+    source: item.source || "email"
+  });
+  return again.length === 0;
 }
 
 function moneyTasksFromSnapshot(db) {
@@ -184,6 +467,184 @@ function aiFlagStillRelevant(flag, snapshot) {
   return true;
 }
 
+/**
+ * Protected-tier rule: learned mutes apply ONLY to reading/social (signal.link).
+ * Deadlines, tasks, events, bills, assessments are never muted away.
+ */
+function isLearnedMutedItem(db, item) {
+  if (!item) return false;
+  if (item.type !== "signal.link") return false;
+  const data = item.data || {};
+  const hints = dbApi.resolveDigestLearned(db, {
+    from: data.from || data.sender || data.sharedBy,
+    sender: data.from || data.sender,
+    groupId: data.groupId,
+    calendarId: data.calendarId,
+    listIds: data.listIds || [],
+    url: data.url,
+    sourceRef: data.sourceRef,
+    data
+  });
+  if (hints.mute || hints.forceKind === "drop") return true;
+  if (hints.junkReading) return true;
+  return false;
+}
+
+function isProtectedTodayRow(row) {
+  if (!row) return false;
+  if (row.protected === true) return true;
+  if (row.kind === "bill" || row.kind === "birthday") return true;
+  if (row.kind === "deadline") return true;
+  if (String(row.domain || "").toLowerCase() === "school") return true;
+  if (row.kind === "task" && (row.dueAt || row.start)) return true;
+  if (row.kind === "event" && String(row.source || "").toLowerCase() === "gcal") {
+    return true;
+  }
+  if (row.kind === "event" && String(row.source || "").toLowerCase() === "canvas") {
+    return true;
+  }
+  return false;
+}
+
+function glanceKind(row) {
+  if (row.kind === "bill") return "deadline";
+  if (row.kind === "birthday") return "personal";
+  if (row.kind === "event") {
+    const title = String(row.title || "").toLowerCase();
+    if (/clinic|rotation|ward/.test(title)) return "clinic";
+    if (/class|lecture|discussion|lab\b|section/.test(title)) return "class";
+    if (String(row.domain || "").toLowerCase() === "school") return "class";
+    return "event";
+  }
+  if (row.kind === "task" || row.kind === "import") {
+    if (row.dueAt || row.start) return "deadline";
+    return "personal";
+  }
+  return row.kind || "event";
+}
+
+function timeLabel(row) {
+  const iso = row.start || row.dueAt || null;
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(11, 16) || null;
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  if (hh === "00" && mm === "00" && String(iso).length <= 10) return null;
+  return `${hh}:${mm}`;
+}
+
+function isDueOnDate(row, asOfDate) {
+  const iso = row.start || row.dueAt || null;
+  if (!iso) return false;
+  return String(iso).slice(0, 10) === asOfDate;
+}
+
+function isOverdueRow(row, asOfDate) {
+  if (row.overdue) return true;
+  const iso = row.dueAt || row.start || null;
+  if (!iso) return false;
+  const day = String(iso).slice(0, 10);
+  return day < asOfDate && (row.kind === "task" || row.kind === "bill" || row.kind === "import");
+}
+
+function buildAnchor({ heavyDay, clearDay, examHorizon, studyNext, backlog }) {
+  if (clearDay) {
+    return "You're clear today — nothing mandatory on the board.";
+  }
+  const nearest = examHorizon?.[0];
+  if (nearest) {
+    const readiness =
+      nearest.total > 0 ? ` (${nearest.done} of ${nearest.total} topics)` : "";
+    if (studyNext?.topic) {
+      const chapter = studyNext.reading ? ` — ${studyNext.reading}` : "";
+      if (heavyDay) {
+        return `${nearest.name} is ${nearest.when}${readiness}. When you have a beat, start with ${studyNext.topic}${chapter}.`;
+      }
+      return `${nearest.name} is ${nearest.when}${readiness} — start with ${studyNext.topic}${chapter}.`;
+    }
+    if (heavyDay) {
+      return `${nearest.name} is ${nearest.when}${readiness}. Keep the day light where you can.`;
+    }
+    return `${nearest.name} is ${nearest.when}${readiness}.`;
+  }
+  if (backlog?.overdue > 0) {
+    return heavyDay
+      ? `${backlog.overdue} overdue loop${backlog.overdue === 1 ? "" : "s"} waiting — pick one when you can.`
+      : `${backlog.overdue} overdue · ${backlog.open} open loops.`;
+  }
+  if (backlog?.open > 0) {
+    return `${backlog.open} open loop${backlog.open === 1 ? "" : "s"} on the board.`;
+  }
+  return "Quiet board — check Detail if you want the full picture.";
+}
+
+function inferTopicCoverageFromCalendar(db) {
+  const topics = dbApi.listTopics(db).filter((t) => !t.reviewed);
+  if (!topics.length) return;
+  const events = dbApi
+    .listSyncItems(db)
+    .filter((item) => item.type === "signal.event" && item.source === "gcal");
+  const asOf = dbApi.getSettings(db).asOfDate || new Date().toISOString().slice(0, 10);
+  events.forEach((event) => {
+    const status = event.executed ? event.result?.status : "open";
+    if (status === "declined") return;
+    const startDay = String(event.data?.start || "").slice(0, 10);
+    if (startDay && startDay > asOf) return;
+    // Only infer for events that already happened or are marked going.
+    if (startDay === asOf && status !== "going" && status !== "done") return;
+    const title = String(event.data?.title || "").toLowerCase();
+    topics.forEach((topic) => {
+      const needle = String(topic.title || "").toLowerCase();
+      const lecture = String(topic.lectureRef || "").toLowerCase();
+      if (!needle || needle.length < 4) return;
+      if (title.includes(needle) || (lecture && title.includes(lecture))) {
+        dbApi.markTopicReviewed(db, topic.id, "inferred");
+      }
+    });
+  });
+}
+
+/** Learning keys + action identity for outbox → learnFromDigestAction. */
+function digestTargetRef(item, extra = {}) {
+  const data = item?.data || {};
+  return {
+    itemId: item.id,
+    sourceRef: data.sourceRef || null,
+    from: data.from || data.sender || data.sharedBy || null,
+    groupId: data.groupId || null,
+    calendarId: data.calendarId || null,
+    url: data.url || null,
+    host: data.host || null,
+    mailbox: data.mailbox || null,
+    listIds: data.listIds || null,
+    domain: data.domain || null,
+    ...extra
+  };
+}
+
+const CANVAS_STALE_DAYS = 45;
+
+function isStaleCanvasTask(item, asOfDate) {
+  if (String(item.source || "").toLowerCase() !== "canvas") return false;
+  const dueAt = item.data?.dueAt || item.data?.deadline || null;
+  if (!dueAt) return false;
+  const dueMs = Date.parse(dueAt);
+  if (!Number.isFinite(dueMs)) return false;
+  const asOfMs = Date.parse(`${asOfDate}T12:00:00Z`);
+  if (!Number.isFinite(asOfMs)) return false;
+  return asOfMs - dueMs > CANVAS_STALE_DAYS * 24 * 60 * 60 * 1000;
+}
+
+function eventDedupeKey(title, start) {
+  const day = String(start || "").slice(0, 10);
+  return `${String(title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100)
+    .toLowerCase()}|${day}`;
+}
+
 function buildDigest(db) {
   const settings = dbApi.getSettings(db);
   const asOfDate = settings.asOfDate || new Date().toISOString().slice(0, 10);
@@ -207,7 +668,24 @@ function buildDigest(db) {
         actions: [{ type: "ack", targetRef: { itemId: item.id } }]
       });
     } else if (item.type === "signal.event") {
+      if (isNoiseDigestEvent(item)) return;
       const status = item.executed ? item.result?.status || "done" : "open";
+      // Watching keeps declined events for awareness even if learning mutes the source.
+      if (status === "declined") {
+        watching.push({
+          kind: "event",
+          id: item.id,
+          title: item.data.title,
+          start: item.data.start,
+          domain: item.data.domain || null,
+          source: item.source || null,
+          status,
+          sortKey: item.data.start ? Date.parse(item.data.start) : Number.MAX_SAFE_INTEGER,
+          actions: []
+        });
+        return;
+      }
+      // Protected tier: never mute events away (mutes are reading/social only).
       const row = {
         kind: "event",
         id: item.id,
@@ -215,60 +693,73 @@ function buildDigest(db) {
         start: item.data.start,
         domain: item.data.domain || null,
         source: item.source || null,
+        from: item.data.from || null,
+        groupId: item.data.groupId || null,
+        calendarId: item.data.calendarId || null,
         status,
         sortKey: item.data.start ? Date.parse(item.data.start) : Number.MAX_SAFE_INTEGER,
         actions: []
       };
-      if (status === "declined") {
-        // Still visible so you know it's happening — just not going.
-        watching.push({ ...row, actions: [] });
-        return;
-      }
       if (status === "going" || status === "done") {
         return;
       }
       row.actions = [
         {
           type: "rsvp.yes",
-          targetRef: { itemId: item.id, sourceRef: item.data.sourceRef, response: "yes" }
+          targetRef: digestTargetRef(item, { response: "yes" })
         },
         {
           type: "rsvp.no",
-          targetRef: { itemId: item.id, sourceRef: item.data.sourceRef, response: "no" }
+          targetRef: digestTargetRef(item, { response: "no" })
         },
         {
           type: "calendar.add",
-          targetRef: { itemId: item.id, sourceRef: item.data.sourceRef }
+          targetRef: digestTargetRef(item, {
+            href: `/api/calendar/ics?itemId=${encodeURIComponent(item.id)}`
+          })
         }
       ];
+      // Prefer Google Calendar over duplicate chat/email events same title+day.
+      row._dedupeKey = eventDedupeKey(row.title, row.start);
+      row._sourceRank =
+        String(item.source || "").toLowerCase() === "gcal"
+          ? 0
+          : String(item.source || "").toLowerCase() === "canvas"
+            ? 1
+            : 2;
       today.push(row);
     } else if (item.type === "signal.task" || item.type === "signal.deadline") {
+      // Protected tier: never mute tasks/deadlines (mutes are reading/social only).
+      if (isNoiseDigestTask(item)) return;
+      if (isStaleCanvasTask(item, asOfDate)) return;
       if (item.executed && ["done", "declined"].includes(item.result?.status)) return;
       const dueAt = item.data.dueAt || item.data.deadline || null;
       const isImport = item.data.kind === "import.statement";
       const actions = [
         {
           type: "task.complete",
-          targetRef: { itemId: item.id }
+          targetRef: digestTargetRef(item)
         }
       ];
       if (isImport) {
         actions.unshift({
           type: "import.statement",
-          targetRef: {
-            itemId: item.id,
+          targetRef: digestTargetRef(item, {
             accountId: item.data.accountId || null,
             href: "/apps/money/money.html"
-          }
+          })
         });
       } else {
         actions.push({
           type: "calendar.add",
-          targetRef: { itemId: item.id, dueAt }
+          targetRef: digestTargetRef(item, {
+            dueAt,
+            href: `/api/calendar/ics?itemId=${encodeURIComponent(item.id)}`
+          })
         });
         actions.push({
           type: "dismiss",
-          targetRef: { itemId: item.id }
+          targetRef: digestTargetRef(item)
         });
       }
       today.push({
@@ -281,6 +772,8 @@ function buildDigest(db) {
         why: item.data.why || null,
         accountId: item.data.accountId || null,
         source: item.source || null,
+        from: item.data.from || null,
+        groupId: item.data.groupId || null,
         sortKey: dueAt ? Date.parse(dueAt) : Number.MAX_SAFE_INTEGER - 2,
         actions
       });
@@ -299,6 +792,7 @@ function buildDigest(db) {
       // Already-expanded chats use signal.event/task/link directly.
       return;
     } else if (item.type === "signal.link") {
+      if (isLearnedMutedItem(db, item)) return;
       const url = item.data.url;
       if (!url || seenReading.has(url)) return;
       seenReading.add(url);
@@ -400,6 +894,51 @@ function buildDigest(db) {
     return (a.sortKey ?? 0) - (b.sortKey ?? 0);
   });
 
+  // Same chat/email often produced both a legacy event and a task — keep the task.
+  const taskTitleKeys = new Set(
+    today
+      .filter((row) => row.kind === "task" || row.kind === "import")
+      .map((row) =>
+        String(row.title || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 100)
+          .toLowerCase()
+      )
+  );
+  for (let i = today.length - 1; i >= 0; i -= 1) {
+    const row = today[i];
+    if (row.kind !== "event") continue;
+    const key = String(row.title || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 100)
+      .toLowerCase();
+    if (taskTitleKeys.has(key)) today.splice(i, 1);
+  }
+
+  // Prefer gcal (then canvas) when the same title+day appears from multiple sources.
+  const bestByKey = new Map();
+  today.forEach((row, index) => {
+    if (row.kind !== "event" || !row._dedupeKey) return;
+    const prev = bestByKey.get(row._dedupeKey);
+    if (
+      !prev ||
+      (row._sourceRank ?? 9) < (prev.row._sourceRank ?? 9)
+    ) {
+      bestByKey.set(row._dedupeKey, { row, index });
+    }
+  });
+  const dropIndexes = new Set();
+  today.forEach((row, index) => {
+    if (row.kind !== "event" || !row._dedupeKey) return;
+    const best = bestByKey.get(row._dedupeKey);
+    if (best && best.index !== index) dropIndexes.add(index);
+  });
+  for (let i = today.length - 1; i >= 0; i -= 1) {
+    if (dropIndexes.has(i)) today.splice(i, 1);
+  }
+
   watching.sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0));
 
   reading
@@ -415,19 +954,132 @@ function buildDigest(db) {
   });
   today.forEach((row) => {
     delete row.sortKey;
+    delete row._dedupeKey;
+    delete row._sourceRank;
   });
   watching.forEach((row) => {
     delete row.sortKey;
   });
 
+  // Tag protected rows for both surfaces.
+  today.forEach((row) => {
+    row.protected = isProtectedTodayRow(row);
+    if (row.leadDays == null && row.kind === "bill") row.leadDays = 5;
+    if (row.leadDays == null && row.domain === "school") row.leadDays = 7;
+  });
+
+  inferTopicCoverageFromCalendar(db);
+
+  const assessments = dbApi.listAssessments(db);
+  const topics = dbApi.listTopics(db);
+  const examHorizon = syllabus.buildExamHorizon(assessments, topics, asOfDate);
+  const studyNext = syllabus.pickStudyNext(assessments, topics, asOfDate);
+  const needsALook = dbApi.listNeedsALook(db);
+
+  const openLoops = today.filter(
+    (row) =>
+      row.kind === "task" ||
+      row.kind === "import" ||
+      row.kind === "bill" ||
+      row.kind === "deadline"
+  );
+  const overdueLoops = openLoops.filter((row) => isOverdueRow(row, asOfDate));
+  const backlogCounts = { open: openLoops.length, overdue: overdueLoops.length };
+
+  const mandatoryToday = today.filter(
+    (row) => row.protected && isDueOnDate(row, asOfDate)
+  );
+  // Missing syllabus/assessments must never read as all-clear.
+  const coverageBlocksClear = (needsALook.coverageGaps || []).some(
+    (gap) => gap.blocksClear
+  );
+  const clearDay =
+    mandatoryToday.length === 0 &&
+    overdueLoops.length === 0 &&
+    !examHorizon.some((e) => e.when === "today") &&
+    !coverageBlocksClear;
+  const heavyDay =
+    examHorizon.some((e) => syllabus.daysUntil(e.date, asOfDate) <= HEAVY_EXAM_DAYS) ||
+    backlogCounts.overdue >= HEAVY_OVERDUE ||
+    backlogCounts.open >= HEAVY_OPEN;
+
+  const glanceToday = today
+    .filter((row) => row.protected)
+    .filter((row) => {
+      const iso = row.start || row.dueAt;
+      if (!iso) return row.kind === "birthday" || row.kind === "bill";
+      const day = String(iso).slice(0, 10);
+      const lead = row.leadDays != null ? row.leadDays : 3;
+      const until = syllabus.daysUntil(day, asOfDate);
+      return until <= lead;
+    })
+    .slice(0, 12)
+    .map((row) => ({
+      id: row.id,
+      time: timeLabel(row),
+      title: row.title || row.name || "Item",
+      kind: glanceKind(row),
+      protected: true,
+      leadDays: row.leadDays != null ? row.leadDays : null
+    }));
+
+  const junkSummary = {
+    count: junk.length,
+    targetRef: junk[0]?.targetRef || null
+  };
+
+  const glanceReading = heavyDay
+    ? []
+    : reading.map((row) => ({ id: row.id, title: row.title }));
+
+  const anchor = buildAnchor({
+    heavyDay,
+    clearDay,
+    examHorizon,
+    studyNext,
+    backlog: backlogCounts
+  });
+
+  const detailBacklog = openLoops.map((row) => ({
+    ...row,
+    overdue: isOverdueRow(row, asOfDate)
+  }));
+
   return {
     v: CURRENT_VERSION,
     generatedAt: new Date().toISOString(),
+    date: asOfDate,
     asOfDate,
-    today,
-    watching,
-    reading,
-    junk
+    glance: {
+      clearDay,
+      heavyDay,
+      anchor,
+      examHorizon,
+      today: glanceToday,
+      backlog: backlogCounts,
+      studyNext,
+      junk: junkSummary,
+      reading: glanceReading
+    },
+    detail: {
+      today,
+      watching,
+      backlog: detailBacklog,
+      reading,
+      junk,
+      examHorizon,
+      topics: topics.map((t) => ({
+        id: t.id,
+        courseId: t.courseId,
+        assessmentId: t.assessmentId,
+        title: t.title,
+        week: t.week,
+        readings: t.readings,
+        reviewed: t.reviewed,
+        reviewedHow: t.reviewedHow
+      })),
+      needsALook
+    }
   };
 }
 
@@ -458,21 +1110,7 @@ async function ingestOutboxFile(db, projectRoot, syncRoot, filePath) {
       (item.type === "signal.sms" || item.type === "signal.chat") &&
       (item.data?.text || item.data?.body)
     ) {
-      const signals = life.extractFromChat({
-        id: item.id.replace(/^(sms|chat):/, ""),
-        text: item.data.text || item.data.body,
-        from: item.data.from || item.data.sharedBy || item.source,
-        receivedAt: item.at || item.collectedAt,
-        source: item.source || "sms",
-        sourceRef: item.data.sourceRef || item.id,
-        url: item.data.url
-      });
-      signals.forEach((signal) => {
-        dbApi.upsertSyncItem(db, {
-          ...signal,
-          collectedAt: item.collectedAt || new Date().toISOString()
-        });
-      });
+      expandIncomingLifeItem(db, item);
     }
   });
 
@@ -588,5 +1226,8 @@ module.exports = {
   buildDigest,
   writeSampleOutbox,
   acceptVersion,
-  executePendingActions
+  executePendingActions,
+  expandIncomingLifeItem,
+  buildIcsForSyncItem,
+  icsForItemId
 };
